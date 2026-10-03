@@ -1,0 +1,12 @@
+[project]
+name = "db-agent"
+version = "0.1.0"
+description = "Ask PostgreSQL, MySQL, MariaDB and Oracle questions in plain English (LangChain + MCP Toolbox)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.4",
+    "langchain-openai>=1.6",
+    "streamlit>=1.40",
+    "toolbox-langchain>=1.4",
+]

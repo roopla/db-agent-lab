@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin actions design</title><style>
+:root{--ink:#1F2933;--sub:#52606D;--line:#D9E2EC;--bg:#FFFFFF;--code:#F5F7FA;--accent:#3B6FD8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 'Segoe UI',Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:22px;margin:36px 0 12px}
+h3{font-size:18px;margin:28px 0 8px}
+a{color:var(--accent)}
+p,li{max-width:80ch}
+img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;margin:12px 0 20px;font-size:14px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#F0F4F8}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13.5px/1.5 Consolas,'DejaVu Sans Mono',monospace}
+pre{background:#1F2933;color:#E4E7EB;padding:14px 16px;border-radius:8px;overflow-x:auto}
+pre code{background:none;color:inherit;padding:0}
+p code,li code,td code{overflow-wrap:anywhere}
+blockquote{margin:16px 0;padding:10px 16px;background:#FFF8E6;border-left:4px solid #D9822B;border-radius:4px}
+blockquote p{margin:4px 0}
+hr{border:none;border-top:1px solid var(--line);margin:28px 0}
+</style></head>
+<body><main>
+<h1 id="design-two-logins-per-database-admin-actions-with-approval">Design: two logins per database, admin actions with approval</h1>
+<p><strong>Status:</strong> design for review, nothing built yet. Docker-only.</p>
+<p><strong>Goal:</strong> the agent can do admin work, such as checking a mounted Oracle standby,
+restarting redo apply or killing a blocking session, without ever giving the model
+admin power.</p>
+<hr />
+<h2 id="1-the-idea-in-one-picture">1. The idea in one picture</h2>
+<pre><code>                                   ┌────────────── existing, unchanged ──────────────┐
+ you ─► agent (CLI / web UI) ──MCP─┤ Toolboxes ─ READ-ONLY login ─► every database    │
+         │                         └──────────────────────────────────────────────────┘
+         │  model picks a tool from the question
+         │
+         │  admin tool?  ── checks (read-only SQL)  → run straight away
+         │               └─ actions (change things) → STOP: show you the action → Approve / Cancel
+         │
+         └──MCP──► db-actions (ONE new container) ─ ADMIN login ─► Oracle standbys (as SYSDG)
+                       fixed SQL only                             Oracle primary, Postgres,
+                       holds the admin passwords                  MySQL, MariaDB
+                       writes the audit log
+</code></pre>
+<p>There are two logins per database:</p>
+<table>
+<thead>
+<tr>
+<th>Login</th>
+<th>Who holds the password</th>
+<th>Used for</th>
+<th>SQL written by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Read-only</strong> (existing <code>agent_reader</code> / <code>C##AGENT_READER</code>)</td>
+<td>the Toolbox containers</td>
+<td>all diagnosis, including free-form SELECTs</td>
+<td>the model, but the database enforces read-only</td>
+</tr>
+<tr>
+<td><strong>Admin</strong> (new, least-privilege)</td>
+<td><code>db-actions</code> only</td>
+<td>fixed <strong>checks</strong> (where read-only can't reach, for example a mounted standby) and fixed <strong>actions</strong></td>
+<td><strong>us, in code.</strong> The model only chooses the action and fills in checked parameters.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>How the login is chosen: by the tool, never by the SQL text.</strong> The model reads your
+question and picks a tool, exactly as it does today. Each tool is hard-wired to one login,
+so the model can't make admin SQL; it can only ask for an action that already exists.</p>
+<hr />
+<h2 id="2-why-not-look-at-the-sql-and-switch-login">2. Why not "look at the SQL and switch login"</h2>
+<p>SQL that looks read-only isn't always read-only in Oracle:</p>
+<ul>
+<li><code>WITH FUNCTION … SELECT</code> runs PL/SQL, including <code>EXECUTE IMMEDIATE</code>, inside a SELECT.</li>
+<li>A function called from a SELECT can do DML in an autonomous transaction.</li>
+<li><code>CALL</code>, anonymous blocks and <code>ALTER SESSION</code> are other ways in.</li>
+</ul>
+<p>With the read-only login none of this matters, because the database refuses. With an
+admin login, a single misjudged statement on production or DR has no safety net. So
+the admin login never runs SQL the model wrote.</p>
+<hr />
+<h2 id="3-components">3. Components</h2>
+<h3 id="31-agent-appagentpy-appapppy-small-changes">3.1 Agent (<code>app/agent.py</code>, <code>app/app.py</code>): small changes</h3>
+<ul>
+<li>It connects to <strong>db-actions</strong> as one more MCP server, the same way it connects to a Toolbox.</li>
+<li><strong>Approval</strong> uses LangChain's built-in <code>HumanInTheLoopMiddleware</code>. Every <strong>action</strong>
+  tool is listed in <code>interrupt_on</code>, with only <em>approve</em> and <em>reject</em> allowed (no editing
+  of parameters). <strong>Check</strong> tools aren't listed, so they run without asking.</li>
+<li>When the model calls an action, the agent <strong>pauses</strong>, shows you the action card
+  (section 5) and resumes only after your decision. Pausing needs a per-conversation
+  memory (a LangGraph checkpointer, one thread per CLI session or browser session).</li>
+<li><strong>Model guard:</strong> actions and checks on <code>oracle_prod</code> require an internal model,
+  the same rule as today.</li>
+<li>The tools each database sees are the Toolbox tools plus that database's own checks
+  and actions from db-actions, so the model never sees actions for other databases.</li>
+</ul>
+<h3 id="32-db-actions-new-container-python">3.2 db-actions (new container, Python)</h3>
+<ul>
+<li>A small <strong>MCP server</strong> written in Python (the official <code>mcp</code> SDK). It speaks the same
+  protocol as Toolbox.</li>
+<li><strong>Drivers:</strong></li>
+<li><code>python-oracledb</code> for Oracle: <code>mode=oracledb.AUTH_MODE_SYSDG</code> for standbys, a normal
+    login for primary actions.</li>
+<li><code>psycopg</code> for PostgreSQL.</li>
+<li><code>PyMySQL</code> for MySQL and MariaDB.</li>
+<li><strong>Configuration:</strong> <code>config/actions.toml</code> lists the <strong>targets</strong> (each database or
+  standby, its connect string, its login type, and the names of the environment
+  variables holding user and password) and which actions are enabled for each target.</li>
+<li><strong>Every tool is a Python function with fixed SQL.</strong> Parameters are validated (types,
+  ranges, allow-lists) and passed as <strong>bind variables</strong>. Identifiers that can't be
+  bound, such as a destination number or a table name, are checked against an allow-list
+  or a strict pattern first.</li>
+<li><strong>Safety limits:</strong></li>
+<li>a statement timeout on every call</li>
+<li>one action per approval</li>
+<li>a per-target switch to turn actions off: <code>actions_enabled = false</code> gives a
+    "checks only" mode</li>
+<li><strong>Audit log</strong> (<code>logs/actions.jsonl</code>, append-only) records:</li>
+<li>who approved it (CLI user or web session)</li>
+<li>when</li>
+<li>the model that proposed it</li>
+<li>your question</li>
+<li>the action, its parameters and the exact SQL that ran</li>
+<li>the result or the error</li>
+<li><strong>Secrets:</strong> admin passwords are only in this container's environment, from <code>.env</code>
+  variables named <code>ADMIN_*</code>. The agent, the web UI and the model never receive them.</li>
+<li>It listens on <code>127.0.0.1:5005</code> (and on the internal Docker network), like the Toolboxes.</li>
+</ul>
+<h3 id="33-toolboxes-no-change">3.3 Toolboxes: no change</h3>
+<p>They keep the read-only logins and serve all diagnosis. No extra Toolboxes.</p>
+<hr />
+<h2 id="4-proposed-first-catalogue">4. Proposed first catalogue</h2>
+<p>The first version would be a pick from this list. <strong>C</strong> = check (no approval),
+<strong>A</strong> = action (approval required).</p>
+<h3 id="oracle-standby-login-cagent_dg-as-sysdg-works-on-a-mounted-standby">Oracle standby: login <code>C##AGENT_DG</code> <strong>as SYSDG</strong> (works on a mounted standby)</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Type</th>
+<th>Fixed SQL (summary)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>standby_status</code></td>
+<td>C</td>
+<td><code>v$database</code> (role, open_mode); <code>v$dataguard_stats</code> (transport lag, apply lag, apply finish time); <code>v$dataguard_process</code> (MRP/RFS: action, thread, sequence)</td>
+</tr>
+<tr>
+<td><code>standby_gaps</code></td>
+<td>C</td>
+<td><code>v$archive_gap</code>; last received vs applied sequence per thread (<code>v$archived_log</code>)</td>
+</tr>
+<tr>
+<td><code>standby_recent_errors</code></td>
+<td>C</td>
+<td>Last ORA- lines from the standby alert log (<code>v$diag_alert_ext</code>, last N hours)</td>
+</tr>
+<tr>
+<td><code>start_apply</code></td>
+<td>A</td>
+<td><code>ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION</code></td>
+</tr>
+<tr>
+<td><code>stop_apply</code></td>
+<td>A</td>
+<td><code>ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="oracle-primary-login-cagent_ops-normal-login-grants-create-session-alter-system">Oracle primary: login <code>C##AGENT_OPS</code> (normal login, grants <code>CREATE SESSION</code> + <code>ALTER SYSTEM</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Type</th>
+<th>Fixed SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>set_dest_state</code></td>
+<td>A</td>
+<td><code>ALTER SYSTEM SET log_archive_dest_state_&lt;n&gt; = ENABLE | DEFER SCOPE=BOTH SID='*'</code> (<code>n</code> 2-31, must be an active standby destination)</td>
+</tr>
+<tr>
+<td><code>kill_session</code></td>
+<td>A</td>
+<td><code>ALTER SYSTEM KILL SESSION '&lt;sid&gt;,&lt;serial#&gt;,@&lt;inst&gt;' IMMEDIATE</code> (numbers only; refused for background sessions and for the agent's own sessions)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="postgresql-login-agent_ops-role-pg_signal_backend">PostgreSQL: login <code>agent_ops</code> (role <code>pg_signal_backend</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Type</th>
+<th>Fixed SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cancel_query</code></td>
+<td>A</td>
+<td><code>SELECT pg_cancel_backend(%s)</code> (pid)</td>
+</tr>
+<tr>
+<td><code>terminate_session</code></td>
+<td>A</td>
+<td><code>SELECT pg_terminate_backend(%s)</code> (pid; refused for superuser sessions)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mysql-mariadb-login-agent_ops-connection_admin-on-mysql-connection-admin-on-mariadb-105">MySQL / MariaDB: login <code>agent_ops</code> (<code>CONNECTION_ADMIN</code> on MySQL; <code>CONNECTION ADMIN</code> on MariaDB 10.5+)</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Type</th>
+<th>Fixed SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kill_query</code></td>
+<td>A</td>
+<td><code>KILL QUERY &lt;id&gt;</code> (integer only)</td>
+</tr>
+<tr>
+<td><code>kill_connection</code></td>
+<td>A</td>
+<td><code>KILL &lt;id&gt;</code> (integer only)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="later-if-wanted">Later, if wanted</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gather_table_stats</code> (Oracle), <code>analyze_table</code> (all engines)</td>
+<td>Allow-listed schemas and tables only</td>
+</tr>
+<tr>
+<td><code>register_logfile</code> (Oracle standby)</td>
+<td>File path restricted to the archive destination folder</td>
+</tr>
+<tr>
+<td><code>switch_logfile</code> (Oracle primary)</td>
+<td><code>ALTER SYSTEM ARCHIVE LOG CURRENT</code>, often used to resolve a transport hiccup</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Not in scope, ever, through this agent:</strong> switchover, failover, shutdown or startup,
+dropping anything, changing users, passwords or parameters other than the ones above,
+and free-form SQL with the admin login.</p>
+<hr />
+<h2 id="5-the-approval-step">5. The approval step</h2>
+<p><strong>Web UI:</strong> the answer pauses and shows a card:</p>
+<pre><code>⚠️  Action proposed: start_apply on standby STBY2 (Oracle, login C##AGENT_DG as SYSDG)
+    Why: dg_health_check → dest 3 recovery_mode = IDLE; standby_status → no MRP process
+    SQL: ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION
+    Model: gpt-oss-120b
+    [ Approve ]   [ Cancel ]
+</code></pre>
+<p><strong>CLI:</strong></p>
+<pre><code>Action proposed: start_apply on standby STBY2 ... (same details)
+Approve? Type 'yes' to run, anything else to cancel:
+</code></pre>
+<p>After <strong>Approve</strong>, db-actions runs the fixed SQL with the admin login, writes the audit
+line, and returns the result. The agent then re-runs the matching check, for example
+<code>standby_status</code>, and tells you whether it worked. <strong>Cancel</strong> tells the model the action
+was declined, and it answers without it.</p>
+<hr />
+<h2 id="6-end-to-end-example">6. End-to-end example</h2>
+<pre><code>You:   is standby 2 in sync?
+Agent: dg_health_check        (Toolbox, primary, read-only)  → dest 3 IDLE, apply lag 47 min
+       standby_status STBY2   (db-actions, SYSDG, check)     → no MRP process; transport lag 0
+       standby_recent_errors  (db-actions, SYSDG, check)     → ORA-00313 at 14:02 (log member missing)
+       → Explains: transport is fine, apply stopped at 14:02 because of ORA-00313.
+         Recommends fixing the missing standby redo log member first.
+         Proposes start_apply once that's fixed.     [ Approve ] [ Cancel ]
+</code></pre>
+<hr />
+<h2 id="7-users-and-setup">7. Users and setup</h2>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Admin user</th>
+<th>Privileges</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Oracle (primary + standbys)</td>
+<td><code>C##AGENT_DG</code></td>
+<td><code>SYSDG</code> (administrative privilege)</td>
+<td>Create on the primary. The <strong>password file</strong> must reach the standbys (copy <code>orapw&lt;SID&gt;</code> to each standby after the grant), otherwise SYSDG logins fail there</td>
+</tr>
+<tr>
+<td>Oracle primary</td>
+<td><code>C##AGENT_OPS</code></td>
+<td><code>CREATE SESSION</code>, <code>ALTER SYSTEM</code></td>
+<td>ALTER SYSTEM is powerful. It's only safe because the SQL is fixed in db-actions</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td><code>agent_ops</code></td>
+<td><code>pg_signal_backend</code></td>
+<td>Can't signal superuser sessions (by design)</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td><code>agent_ops</code></td>
+<td><code>CONNECTION_ADMIN</code></td>
+<td>No SUPER</td>
+</tr>
+<tr>
+<td>MariaDB</td>
+<td><code>agent_ops</code></td>
+<td><code>CONNECTION ADMIN</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Creation scripts would be supplied per engine, like <code>db/oracle-prod/</code>.</p>
+<hr />
+<h2 id="8-configuration-sketch">8. Configuration sketch</h2>
+<p><code>config/actions.toml</code>:</p>
+<pre><code class="language-toml">[[target]]
+key = &quot;stby1&quot;                       # name used in questions and on the action card
+database = &quot;oracle_prod&quot;            # which agent database it belongs to
+engine = &quot;oracle&quot;
+dsn = &quot;${ADMIN_STBY1_DSN}&quot;          # e.g. stby1-host:1521/STBY1
+login = &quot;sysdg&quot;                     # sysdg | normal
+user = &quot;${ADMIN_ORACLE_DG_USER}&quot;
+password = &quot;${ADMIN_ORACLE_DG_PASSWORD}&quot;
+checks = [&quot;standby_status&quot;, &quot;standby_gaps&quot;, &quot;standby_recent_errors&quot;]
+actions = [&quot;start_apply&quot;, &quot;stop_apply&quot;]
+
+[[target]]
+key = &quot;prod_primary&quot;
+database = &quot;oracle_prod&quot;
+engine = &quot;oracle&quot;
+dsn = &quot;${ORACLE_PROD_CONNECTION_STRING}&quot;
+login = &quot;normal&quot;
+user = &quot;${ADMIN_ORACLE_OPS_USER}&quot;
+password = &quot;${ADMIN_ORACLE_OPS_PASSWORD}&quot;
+actions = [&quot;set_dest_state&quot;, &quot;kill_session&quot;]
+</code></pre>
+<p><code>docker-compose.yml</code> gets one service, <code>db-actions</code> (profile <code>actions</code>, port <code>127.0.0.1:5005</code>),
+which receives only the <code>ADMIN_*</code> variables.</p>
+<hr />
+<h2 id="9-safety-layers-summed-up">9. Safety layers, summed up</h2>
+<ol>
+<li><strong>The model can't write admin SQL:</strong> fixed SQL in code, validated parameters, bind variables.</li>
+<li><strong>A human approves every change:</strong> the approval card shows the exact SQL first.</li>
+<li><strong>Least privilege:</strong> SYSDG instead of SYS, <code>pg_signal_backend</code> instead of superuser, no MySQL SUPER.</li>
+<li><strong>Passwords are isolated:</strong> admin passwords live only in db-actions.</li>
+<li><strong>Internal models only</strong> for production targets.</li>
+<li><strong>Audit log</strong> of every action, including cancelled ones.</li>
+<li><strong>Kill switch:</strong> <code>actions_enabled = false</code> per target, or stop the <code>db-actions</code> container.</li>
+</ol>
+<hr />
+<h2 id="10-testing-plan-homelab">10. Testing plan (homelab)</h2>
+<ol>
+<li>Create the users; confirm a <code>C##AGENT_DG</code> SYSDG login works on the <strong>mounted</strong> standby
+   from the db-actions container. If python-oracledb's default (Thin) mode can't make
+   the SYSDG login to a mounted standby, switch the container to Thick mode with Oracle
+   Instant Client.</li>
+<li>Checks: compare <code>standby_status</code> with <code>v$dataguard_stats</code> run by hand.</li>
+<li>Actions: stop apply by hand, then ask the agent. Expect a CRITICAL verdict, a proposed
+   <code>start_apply</code>, Approve, <code>MANAGED REAL TIME APPLY</code>, and an audit line.</li>
+<li>Cancel path: a proposal you cancel must not run (check the audit log and <code>v$dataguard_process</code>).</li>
+<li>Guard: switch to an external model and ask the same question. Prod checks and actions
+   must be blocked.</li>
+</ol>
+<hr />
+<h2 id="11-decisions-needed-before-building">11. Decisions needed before building</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Decision</th>
+<th>Default if you have no preference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>First catalogue (section 4)</td>
+<td>Oracle standby checks + <code>start_apply</code>/<code>stop_apply</code> + <code>kill_session</code> on all engines</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Admin users</td>
+<td>Dedicated least-privilege users (section 7)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Approval</td>
+<td>Both: web UI buttons and <code>yes</code> in the CLI</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Audit log location</td>
+<td><code>logs/actions.jsonl</code> on the Docker host</td>
+</tr>
+</tbody>
+</table>
+</main></body></html>

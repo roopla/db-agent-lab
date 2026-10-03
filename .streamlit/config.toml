@@ -1,0 +1,16 @@
+# Streamlit settings for the db-agent web UI (read when you start Streamlit from the
+# project folder: uv run --env-file .env streamlit run app/app.py)
+
+[client]
+# Keep the full ⋮ menu (System/Light/Dark theme, Rerun, Clear cache, Print).
+# "viewer"/"minimal" would also remove the theme switch. The Deploy button is
+# hidden by app/app.py instead.
+toolbarMode = "developer"
+
+[server]
+# Don't try to open a browser on the server.
+headless = true
+
+[browser]
+# Don't send usage statistics to Streamlit.
+gatherUsageStats = false

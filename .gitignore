@@ -1,0 +1,5 @@
+.env
+.venv/
+__pycache__/
+k8s/base/secrets.env
+k8s/overlays/team/auth

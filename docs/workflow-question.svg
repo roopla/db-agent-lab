@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 840" width="1280" height="840"><defs><marker id="a2F9E5B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2F9E5B"/></marker><marker id="a3B6FD8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3B6FD8"/></marker><marker id="a52606D" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52606D"/></marker><marker id="a8E44AD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8E44AD"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="840" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">What happens when you ask a question</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Example: oracle_prod · “Is Data Guard healthy?”  —  every arrow is one step, top to bottom.</text>
+<rect x="25" y="90" width="190" height="40" rx="10" fill="#EEF2F6" stroke="#52606D" stroke-width="1.6"/>
+<text x="120" y="115" font-size="13.5" fill="#52606D" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">You</text>
+<line x1="120" y1="130" x2="120" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="295" y="90" width="190" height="40" rx="10" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="390" y="115" font-size="13.5" fill="#3B6FD8" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Agent (app/agent.py)</text>
+<line x1="390" y1="130" x2="390" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="565" y="90" width="190" height="40" rx="10" fill="#F3E8FD" stroke="#8E44AD" stroke-width="1.6"/>
+<text x="660" y="115" font-size="13.5" fill="#8E44AD" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Model</text>
+<line x1="660" y1="130" x2="660" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="825" y="90" width="190" height="40" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="920" y="115" font-size="13.5" fill="#2F9E5B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">MCP Toolbox :5004</text>
+<line x1="920" y1="130" x2="920" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="1065" y="90" width="190" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="1160" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary</text>
+<line x1="1160" y1="130" x2="1160" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="120" y1="170" x2="390" y2="170" stroke="#52606D" stroke-width="1.8" marker-end="url(#a52606D)"/>
+<text x="255.0" y="162" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">Is Data Guard healthy?</text>
+<circle cx="40" cy="168" r="11" fill="#52606D"/>
+<text x="40" y="172.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">1</text>
+<rect x="400" y="206" width="330" height="28" rx="6" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="410" y="225" font-size="11.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">model allowed for oracle_prod? (internal_models_only)</text>
+<circle cx="40" cy="220" r="11" fill="#3B6FD8"/>
+<text x="40" y="224.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">2</text>
+<line x1="390" y1="274" x2="660" y2="274" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="525.0" y="266" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">question + history + tools + runbook</text>
+<circle cx="40" cy="272" r="11" fill="#3B6FD8"/>
+<text x="40" y="276.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">3</text>
+<line x1="660" y1="344" x2="390" y2="344" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="336" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">tool call: dg_health_check()</text>
+<circle cx="40" cy="342" r="11" fill="#8E44AD"/>
+<text x="40" y="346.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">4</text>
+<line x1="390" y1="396" x2="920" y2="396" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="655.0" y="388" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">MCP tools/call  dg_health_check</text>
+<circle cx="40" cy="394" r="11" fill="#3B6FD8"/>
+<text x="40" y="398.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">5</text>
+<line x1="920" y1="448" x2="1160" y2="448" stroke="#2F9E5B" stroke-width="1.8" marker-end="url(#a2F9E5B)"/>
+<text x="1040.0" y="440" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">fixed SQL as C##AGENT_READER</text>
+<circle cx="40" cy="446" r="11" fill="#2F9E5B"/>
+<text x="40" y="450.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">6</text>
+<line x1="1160" y1="500" x2="920" y2="500" stroke="#C0392B" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="1040.0" y="492" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">rows: VALID, no gap, lag 0 s</text>
+<circle cx="40" cy="498" r="11" fill="#C0392B"/>
+<text x="40" y="502.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">7</text>
+<line x1="920" y1="552" x2="390" y2="552" stroke="#2F9E5B" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a2F9E5B)"/>
+<text x="655.0" y="544" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">JSON result</text>
+<circle cx="40" cy="550" r="11" fill="#2F9E5B"/>
+<text x="40" y="554.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">8</text>
+<line x1="390" y1="604" x2="660" y2="604" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="525.0" y="596" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">tool result</text>
+<circle cx="40" cy="602" r="11" fill="#3B6FD8"/>
+<text x="40" y="606.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">9</text>
+<line x1="660" y1="656" x2="390" y2="656" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="648" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">more tools if needed (dg_apply_progress …)</text>
+<circle cx="40" cy="654" r="11" fill="#8E44AD"/>
+<text x="40" y="658.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">10</text>
+<line x1="660" y1="708" x2="390" y2="708" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="700" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">answer: verdict + evidence + fixes</text>
+<circle cx="40" cy="706" r="11" fill="#8E44AD"/>
+<text x="40" y="710.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">11</text>
+<line x1="390" y1="760" x2="120" y2="760" stroke="#3B6FD8" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a3B6FD8)"/>
+<text x="255.0" y="752" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">[Oracle PROD] HEALTHY … + tools used</text>
+<circle cx="40" cy="758" r="11" fill="#3B6FD8"/>
+<text x="40" y="762.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">12</text>
+<rect x="300" y="300" width="910" height="374" rx="8" fill="none" stroke="#8E44AD" stroke-width="1.2" stroke-dasharray="3 3"/>
+<text x="310" y="316" font-size="11.5" fill="#8E44AD" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">loop  ·  one tool call at a time  ·  max 4 execute_sql per question</text>
+<text x="30" y="828" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Solid = request, dashed = response. The model never sees database passwords; the database refuses any write.</text></svg>

@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>db-agent Architecture</title>
+<style>
+:root{--ink:#1F2933;--sub:#52606D;--line:#D9E2EC;--bg:#F5F7FA;--card:#FFFFFF;--accent:#3B6FD8;--code:#EEF2F6}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ink:#E4E7EB;--sub:#9AA5B1;--line:#3E4C59;--bg:#14191F;--card:#1F2933;--accent:#7BA4F0;--code:#2A3541}}
+:root[data-theme="dark"]{--ink:#E4E7EB;--sub:#9AA5B1;--line:#3E4C59;--bg:#14191F;--card:#1F2933;--accent:#7BA4F0;--code:#2A3541}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 'Segoe UI',Helvetica,Arial,sans-serif}
+main{max-width:1320px;margin:0 auto;padding:28px 16px 80px}
+h1{font-size:30px;margin:0 0 4px}
+.lead{color:var(--sub);margin:0 0 20px;max-width:90ch}
+nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 28px}
+nav a{padding:6px 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;background:var(--card);font-size:14px}
+nav a:hover{border-color:var(--accent);color:var(--accent)}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 20px;margin:0 0 26px}
+h2{font-size:22px;margin:0 0 6px}
+section>p{max-width:95ch;color:var(--ink)}
+.fig{overflow-x:auto;border-radius:10px;border:1px solid var(--line);background:#fff;margin:14px 0}
+.fig svg{display:block;width:100%;height:auto;min-width:760px}
+ol,ul{max-width:95ch}
+li{margin:4px 0}
+code{background:var(--code);padding:1px 6px;border-radius:5px;font:14px Consolas,'DejaVu Sans Mono',monospace}
+table{border-collapse:collapse;width:100%;font-size:14.5px;margin:10px 0}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:var(--code)}
+.tbl{overflow-x:auto}
+footer{color:var(--sub);font-size:13px}
+</style></head><body><main>
+<h1>db-agent: architecture and workflows</h1>
+<p class="lead">Ask PostgreSQL, MySQL, MariaDB and an Oracle 19c Data Guard pair questions in plain English.
+Everything runs with Docker Compose on one Linux VM. Four pictures, each with what to take away from it.
+Setup steps are in <code>SETUP.md</code>; the Oracle lab in <code>ORACLE-LAB.md</code>.</p>
+<nav><a href="#arch">1 · Architecture</a><a href="#ask">2 · Asking a question</a>
+<a href="#build">3 · How the Oracle lab builds</a><a href="#redo">4 · Redo flow &amp; what the agent sees</a>
+<a href="#ports">5 · Ports &amp; names</a></nav>
+
+<section id="arch"><h2>1 · Architecture</h2>
+<p>Three layers. The <b>Python app</b> (your terminal or the web UI) runs the LangChain agent and talks to the
+<b>model</b> over HTTPS. For data it never touches a database directly: it calls the <b>MCP Toolbox</b> for that
+database, and the Toolbox runs SQL with a <b>read-only login</b>. The Oracle lab adds a primary and a physical
+standby; the agent's Toolbox connects to the primary only.</p>
+<div class="fig"><svg role="img" aria-label="architecture" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" width="1280" height="900"><defs><marker id="a3B6FD8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3B6FD8"/></marker><marker id="a7B8794" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7B8794"/></marker><marker id="a8E44AD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8E44AD"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="900" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">db-agent architecture</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Docker Compose on one Linux VM (VirtualBox home lab or cloud). Every port is bound to 127.0.0.1.</text>
+<rect x="30" y="130" width="230" height="110" rx="10" fill="#EEF2F6" stroke="#52606D" stroke-width="1.6"/>
+<text x="42" y="152" font-size="14" fill="#52606D" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Your laptop</text>
+<text x="42" y="172" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">browser  http://localhost:8501</text>
+<text x="42" y="189" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">terminal (ssh)</text>
+<text x="42" y="206" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ssh -L 8501:localhost:8501</text>
+<rect x="30" y="470" width="230" height="170" rx="10" fill="#F3E8FD" stroke="#8E44AD" stroke-width="1.6"/>
+<text x="42" y="492" font-size="14" fill="#8E44AD" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Model (HTTPS)</text>
+<text x="42" y="512" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">OpenAI  api.openai.com</text>
+<text x="42" y="529" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  — or —</text>
+<text x="42" y="546" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Open WebUI /api</text>
+<text x="42" y="563" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">(in-house vLLM, gpt-oss …)</text>
+<text x="42" y="580" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif"></text>
+<text x="42" y="597" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">OPENAI_BASE_URL in .env</text>
+<rect x="290" y="85" width="960" height="795" rx="14" fill="#FCFCFD" stroke="#52606D" stroke-width="1.4" stroke-dasharray="8 5"/>
+<text x="304" y="107" font-size="13" fill="#52606D" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Linux VM · Ubuntu 24.04 · 16 GB RAM · 4 vCPU · 100 GB</text>
+<rect x="320" y="130" width="270" height="250" rx="10" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="332" y="152" font-size="14" fill="#3B6FD8" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Python app  (uv · .venv)</text>
+<text x="332" y="172" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">app/agent.py   terminal chat</text>
+<text x="332" y="189" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">app/app.py     web UI  :8501</text>
+<text x="332" y="206" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">LangChain create_agent</text>
+<text x="332" y="223" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">one specialist per database</text>
+<text x="332" y="240" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">databases.toml: dialect + notes</text>
+<text x="332" y="257" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  (oracle_prod: DG runbook)</text>
+<text x="332" y="274" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">model picker: /models</text>
+<text x="332" y="291" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">guards: 4-SQL cap, write refusal,</text>
+<text x="332" y="308" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  external-model block</text>
+<text x="332" y="325" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif"></text>
+<text x="332" y="342" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">→ MCP over HTTP to each Toolbox</text>
+<line x1="260" y1="190" x2="320" y2="190" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="290" y="182" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">SSH tunnel</text>
+<line x1="320" y1="340" x2="260" y2="540" stroke="#8E44AD" stroke-width="1.8" marker-end="url(#a8E44AD)"/>
+<text x="282" y="425" font-size="10.5" fill="#52606D" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif">chat +</text>
+<text x="282" y="439" font-size="10.5" fill="#52606D" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif">tool calls</text>
+<rect x="320" y="420" width="270" height="205" rx="10" fill="#FFFBEA" stroke="#C9A227" stroke-width="1.6"/>
+<text x="332" y="442" font-size="14" fill="#C9A227" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Read-only by design</text>
+<text x="332" y="462" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Toolbox logs in as agent_reader /</text>
+<text x="332" y="479" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">C##AGENT_READER: SELECT + monitoring</text>
+<text x="332" y="496" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">The database refuses writes.</text>
+<text x="332" y="513" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Admin/SYS: setup scripts only.</text>
+<text x="332" y="530" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle_prod: in-house models only</text>
+<text x="332" y="547" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  (lab: ALLOW_EXTERNAL_MODELS_FOR)</text>
+<text x="332" y="564" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Secrets in .env (chmod 600)</text>
+<text x="332" y="581" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Web UI only via SSH tunnel</text>
+<rect x="320" y="660" width="270" height="150" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="332" y="682" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Docker volumes</text>
+<text x="332" y="702" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">pgdata · mysqldata · mariadbdata</text>
+<text x="332" y="719" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">oraprimary   primary datafiles,</text>
+<text x="332" y="736" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">             spfile, archive logs</text>
+<text x="332" y="753" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">orastandby   standby files + config</text>
+<text x="332" y="770" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">orashared    orapw + primary_ready</text>
+<text x="332" y="787" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">             (hand-over to standby)</text>
+<rect x="620" y="120" width="610" height="745" rx="14" fill="#F7F9FB" stroke="#7B8794" stroke-width="1.4" stroke-dasharray="8 5"/>
+<text x="634" y="142" font-size="13" fill="#52606D" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Docker Compose · network tool-network</text>
+<text x="760" y="160" font-size="12.5" fill="#52606D" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">MCP Toolbox (one per DB)</text>
+<text x="1075" y="160" font-size="12.5" fill="#52606D" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Databases</text>
+<rect x="650" y="172" width="220" height="66" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="662" y="194" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox  :5000</text>
+<text x="662" y="214" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Postgres · 32 tools</text>
+<rect x="955" y="172" width="245" height="66" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="967" y="194" font-size="14" fill="#D9822B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">db  PostgreSQL 16</text>
+<text x="967" y="214" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">shop  ·  :5432</text>
+<line x1="870" y1="205" x2="955" y2="205" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="912.5" y="199.0" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">read-only</text>
+<line x1="590" y1="255" x2="650" y2="205" stroke="#3B6FD8" stroke-width="1.4" marker-end="url(#a3B6FD8)"/>
+<rect x="650" y="260" width="220" height="66" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="662" y="282" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox-mysql  :5001</text>
+<text x="662" y="302" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">MySQL · 9 tools</text>
+<rect x="955" y="260" width="245" height="66" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="967" y="282" font-size="14" fill="#D9822B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">mysql  MySQL 8.4</text>
+<text x="967" y="302" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">inventory  ·  :3306</text>
+<line x1="870" y1="293" x2="955" y2="293" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="912.5" y="287.0" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">read-only</text>
+<line x1="590" y1="255" x2="650" y2="293" stroke="#3B6FD8" stroke-width="1.4" marker-end="url(#a3B6FD8)"/>
+<rect x="650" y="348" width="220" height="66" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="662" y="370" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox-mariadb  :5002</text>
+<text x="662" y="390" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">MariaDB · 9 tools</text>
+<rect x="955" y="348" width="245" height="66" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="967" y="370" font-size="14" fill="#D9822B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">mariadb  MariaDB 11.4</text>
+<text x="967" y="390" font-size="12.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">support  ·  :3307</text>
+<line x1="870" y1="381" x2="955" y2="381" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="912.5" y="375.0" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">read-only</text>
+<line x1="590" y1="255" x2="650" y2="381" stroke="#3B6FD8" stroke-width="1.4" marker-end="url(#a3B6FD8)"/>
+<rect x="640" y="440" width="575" height="405" rx="12" fill="#FFF9F9" stroke="#C0392B" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="655" y="462" font-size="12.5" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Oracle 19c Data Guard lab   (profiles oracle-lab + oracle-prod)</text>
+<rect x="650" y="490" width="220" height="100" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="662" y="512" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox-oracle-prod :5004</text>
+<text x="662" y="532" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">30 tools: 8 Data Guard,</text>
+<text x="662" y="549" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">13 performance, 6 space,</text>
+<text x="662" y="566" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">3 general</text>
+<line x1="590" y1="255" x2="650" y2="540" stroke="#3B6FD8" stroke-width="1.4" marker-end="url(#a3B6FD8)"/>
+<rect x="955" y="480" width="245" height="120" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="967" y="502" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary</text>
+<text x="967" y="522" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">CDB ORCLCDB · PDB ORCLPDB1</text>
+<text x="967" y="539" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">PRIMARY · READ WRITE</text>
+<text x="967" y="556" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ARCHIVELOG · FORCE LOGGING</text>
+<text x="967" y="573" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">localhost:1531</text>
+<line x1="870" y1="540" x2="955" y2="540" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="912.5" y="534.0" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">read-only</text>
+<rect x="955" y="690" width="245" height="120" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="967" y="712" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-standby</text>
+<text x="967" y="732" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ORCLCDB_STBY</text>
+<text x="967" y="749" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">PHYSICAL STANDBY · MOUNTED</text>
+<text x="967" y="766" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">MRP real-time apply</text>
+<text x="967" y="783" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">localhost:1532</text>
+<line x1="1000" y1="600" x2="1000" y2="690" stroke="#C0392B" stroke-width="2.2" marker-end="url(#aC0392B)"/>
+<text x="1008" y="622" font-size="11" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">redo ASYNC</text>
+<text x="1008" y="636" font-size="10.5" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">dest 2 → DG_STANDBY</text>
+<line x1="1170" y1="690" x2="1170" y2="600" stroke="#C0392B" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="1162" y="662" font-size="10.5" fill="#52606D" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif">FAL: fetch</text>
+<text x="1162" y="676" font-size="10.5" fill="#52606D" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif">missing logs</text>
+<rect x="650" y="620" width="220" height="60" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="662" y="642" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-init (one-off)</text>
+<text x="662" y="662" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">chown orashared → exit</text>
+<rect x="650" y="705" width="220" height="110" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="662" y="727" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">orashared volume</text>
+<text x="662" y="747" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">orapwORCLCDB</text>
+<text x="662" y="764" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">primary_service</text>
+<text x="662" y="781" font-size="12" fill="#1F2933" text-anchor="start" font-family="Consolas, DejaVu Sans Mono, monospace">primary_ready  (flag)</text>
+<line x1="870" y1="725" x2="955" y2="585" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<line x1="870" y1="775" x2="955" y2="760" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<text x="930" y="680" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">writes</text>
+<text x="905" y="785" font-size="10.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">reads</text></svg>
+</div>
+<ul>
+<li><b>One Toolbox per database</b> because the built-in tool sets reuse names (<code>execute_sql</code>, <code>list_tables</code>).</li>
+<li><b>Read-only is enforced by the database</b>, not by the prompt: <code>agent_reader</code> / <code>C##AGENT_READER</code> cannot write.</li>
+<li><b>The web UI has no login</b>: it listens on the VM only, and you reach it through an SSH tunnel.</li>
+<li><b>Model choice</b> is per session; <code>oracle_prod</code> refuses external models unless you allow it for the lab.</li>
+</ul></section>
+
+<section id="ask"><h2>2 · What happens when you ask a question</h2>
+<p>The agent is a loop: the model chooses a tool, the app runs it through the Toolbox, the result goes back to the
+model, until the model can answer. For <code>oracle_prod</code> the prompt carries a Data Guard runbook from
+<code>app/databases.toml</code>, so the model knows which tools to call first and what counts as a problem.</p>
+<div class="fig"><svg role="img" aria-label="workflow-question" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 840" width="1280" height="840"><defs><marker id="a2F9E5B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2F9E5B"/></marker><marker id="a3B6FD8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3B6FD8"/></marker><marker id="a52606D" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52606D"/></marker><marker id="a8E44AD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8E44AD"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="840" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">What happens when you ask a question</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Example: oracle_prod · “Is Data Guard healthy?”  —  every arrow is one step, top to bottom.</text>
+<rect x="25" y="90" width="190" height="40" rx="10" fill="#EEF2F6" stroke="#52606D" stroke-width="1.6"/>
+<text x="120" y="115" font-size="13.5" fill="#52606D" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">You</text>
+<line x1="120" y1="130" x2="120" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="295" y="90" width="190" height="40" rx="10" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="390" y="115" font-size="13.5" fill="#3B6FD8" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Agent (app/agent.py)</text>
+<line x1="390" y1="130" x2="390" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="565" y="90" width="190" height="40" rx="10" fill="#F3E8FD" stroke="#8E44AD" stroke-width="1.6"/>
+<text x="660" y="115" font-size="13.5" fill="#8E44AD" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Model</text>
+<line x1="660" y1="130" x2="660" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="825" y="90" width="190" height="40" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="920" y="115" font-size="13.5" fill="#2F9E5B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">MCP Toolbox :5004</text>
+<line x1="920" y1="130" x2="920" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="1065" y="90" width="190" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="1160" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary</text>
+<line x1="1160" y1="130" x2="1160" y2="810" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="120" y1="170" x2="390" y2="170" stroke="#52606D" stroke-width="1.8" marker-end="url(#a52606D)"/>
+<text x="255.0" y="162" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">Is Data Guard healthy?</text>
+<circle cx="40" cy="168" r="11" fill="#52606D"/>
+<text x="40" y="172.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">1</text>
+<rect x="400" y="206" width="330" height="28" rx="6" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="410" y="225" font-size="11.5" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">model allowed for oracle_prod? (internal_models_only)</text>
+<circle cx="40" cy="220" r="11" fill="#3B6FD8"/>
+<text x="40" y="224.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">2</text>
+<line x1="390" y1="274" x2="660" y2="274" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="525.0" y="266" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">question + history + tools + runbook</text>
+<circle cx="40" cy="272" r="11" fill="#3B6FD8"/>
+<text x="40" y="276.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">3</text>
+<line x1="660" y1="344" x2="390" y2="344" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="336" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">tool call: dg_health_check()</text>
+<circle cx="40" cy="342" r="11" fill="#8E44AD"/>
+<text x="40" y="346.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">4</text>
+<line x1="390" y1="396" x2="920" y2="396" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="655.0" y="388" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">MCP tools/call  dg_health_check</text>
+<circle cx="40" cy="394" r="11" fill="#3B6FD8"/>
+<text x="40" y="398.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">5</text>
+<line x1="920" y1="448" x2="1160" y2="448" stroke="#2F9E5B" stroke-width="1.8" marker-end="url(#a2F9E5B)"/>
+<text x="1040.0" y="440" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">fixed SQL as C##AGENT_READER</text>
+<circle cx="40" cy="446" r="11" fill="#2F9E5B"/>
+<text x="40" y="450.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">6</text>
+<line x1="1160" y1="500" x2="920" y2="500" stroke="#C0392B" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="1040.0" y="492" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">rows: VALID, no gap, lag 0 s</text>
+<circle cx="40" cy="498" r="11" fill="#C0392B"/>
+<text x="40" y="502.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">7</text>
+<line x1="920" y1="552" x2="390" y2="552" stroke="#2F9E5B" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a2F9E5B)"/>
+<text x="655.0" y="544" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">JSON result</text>
+<circle cx="40" cy="550" r="11" fill="#2F9E5B"/>
+<text x="40" y="554.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">8</text>
+<line x1="390" y1="604" x2="660" y2="604" stroke="#3B6FD8" stroke-width="1.8" marker-end="url(#a3B6FD8)"/>
+<text x="525.0" y="596" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">tool result</text>
+<circle cx="40" cy="602" r="11" fill="#3B6FD8"/>
+<text x="40" y="606.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">9</text>
+<line x1="660" y1="656" x2="390" y2="656" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="648" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">more tools if needed (dg_apply_progress …)</text>
+<circle cx="40" cy="654" r="11" fill="#8E44AD"/>
+<text x="40" y="658.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">10</text>
+<line x1="660" y1="708" x2="390" y2="708" stroke="#8E44AD" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a8E44AD)"/>
+<text x="525.0" y="700" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">answer: verdict + evidence + fixes</text>
+<circle cx="40" cy="706" r="11" fill="#8E44AD"/>
+<text x="40" y="710.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">11</text>
+<line x1="390" y1="760" x2="120" y2="760" stroke="#3B6FD8" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a3B6FD8)"/>
+<text x="255.0" y="752" font-size="12" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">[Oracle PROD] HEALTHY … + tools used</text>
+<circle cx="40" cy="758" r="11" fill="#3B6FD8"/>
+<text x="40" y="762.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">12</text>
+<rect x="300" y="300" width="910" height="374" rx="8" fill="none" stroke="#8E44AD" stroke-width="1.2" stroke-dasharray="3 3"/>
+<text x="310" y="316" font-size="11.5" fill="#8E44AD" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">loop  ·  one tool call at a time  ·  max 4 execute_sql per question</text>
+<text x="30" y="828" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Solid = request, dashed = response. The model never sees database passwords; the database refuses any write.</text></svg>
+</div>
+<ol>
+<li>The model only sees tool <i>descriptions</i> and results. Passwords stay in <code>.env</code> and the Toolbox.</li>
+<li>Custom tools (all 30 Oracle ones) are <b>fixed SQL</b>: the model supplies values, never SQL.
+Free-form SQL goes through <code>execute_sql</code>, capped at 4 per question.</li>
+<li>The answer names the database and lists the tools used, so you can check the evidence.</li>
+</ol></section>
+
+<section id="build"><h2>3 · How the Oracle Data Guard lab builds itself</h2>
+<p>The first <code>docker compose up</code> takes 30-70 minutes; later starts take about a minute. The two Oracle
+containers coordinate through a small shared volume: the primary drops its password file and a
+<code>primary_ready</code> flag there, and the standby waits for that flag before cloning.</p>
+<div class="fig"><svg role="img" aria-label="workflow-dg-build" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1010" width="1280" height="1010"><defs><marker id="a7B8794" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7B8794"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="1010" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">How the Data Guard lab builds itself (first docker compose up)</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Time runs downward. Later starts skip straight to “open / mount + apply” (about a minute).</text>
+<rect x="30" y="90" width="200" height="40" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="130" y="115" font-size="13.5" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-init</text>
+<line x1="130" y1="130" x2="130" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="320" y="90" width="200" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="420" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary</text>
+<line x1="420" y1="130" x2="420" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="590" y="90" width="200" height="40" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="690" y="115" font-size="13.5" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">orashared volume</text>
+<line x1="690" y1="130" x2="690" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="860" y="90" width="200" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="960" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-standby</text>
+<line x1="960" y1="130" x2="960" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="1080" y="90" width="200" height="40" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1180" y="115" font-size="13.5" fill="#2F9E5B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox-oracle-prod</text>
+<line x1="1180" y1="130" x2="1180" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="25.0" y="150" width="210" height="51" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="37.0" y="172" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">chown orashared</text>
+<text x="37.0" y="192" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">to oracle:oinstall, exit 0</text>
+<circle cx="25.0" cy="150" r="11" fill="#7B8794"/>
+<text x="25.0" y="154.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">1</text>
+<text x="130" y="232" font-size="11.5" fill="#52606D" text-anchor="middle" font-style="italic" font-family="Segoe UI, Helvetica, Arial, sans-serif">~1 min</text>
+<rect x="295.0" y="160" width="250" height="85" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="307.0" y="182" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">createDB.sh (image)</text>
+<text x="307.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">dbca: CDB ORCLCDB + PDB ORCLPDB1</text>
+<text x="307.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ENABLE_ARCHIVELOG=true</text>
+<text x="307.0" y="236" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">15-40 minutes</text>
+<circle cx="295.0" cy="160" r="11" fill="#C0392B"/>
+<text x="295.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">2</text>
+<line x1="130" y1="205" x2="295" y2="205" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<rect x="290.0" y="285" width="260" height="153" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="307" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">01-dataguard-primary.sh</text>
+<text x="302.0" y="327" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">force logging</text>
+<text x="302.0" y="344" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby_file_management=AUTO</text>
+<text x="302.0" y="361" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_config DG_CONFIG</text>
+<text x="302.0" y="378" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_dest_2 → DG_STANDBY</text>
+<text x="302.0" y="395" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">fal_server, standby redo logs</text>
+<text x="302.0" y="412" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">tnsnames DG_PRIMARY/STANDBY</text>
+<text x="302.0" y="429" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">create C##AGENT_READER</text>
+<circle cx="290.0" cy="285" r="11" fill="#C0392B"/>
+<text x="290.0" y="289.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">3</text>
+<rect x="590.0" y="480" width="200" height="85" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="602.0" y="502" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">hand-over files</text>
+<text x="602.0" y="522" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">orapwORCLCDB</text>
+<text x="602.0" y="539" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary_service</text>
+<text x="602.0" y="556" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary_ready</text>
+<circle cx="590.0" cy="480" r="11" fill="#7B8794"/>
+<text x="590.0" y="484.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">4</text>
+<line x1="550" y1="500" x2="590" y2="500" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="570.0" y="494.0" font-size="11" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">copy</text>
+<rect x="290.0" y="560" width="260" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="582" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">DATABASE IS READY</text>
+<text x="302.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">open READ WRITE, listener up</text>
+<circle cx="290.0" cy="560" r="11" fill="#C0392B"/>
+<text x="290.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">5</text>
+<rect x="840.0" y="160" width="240" height="68" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="852.0" y="182" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">wait for primary_ready</text>
+<text x="852.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">polls the shared volume</text>
+<text x="852.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">every 30 s</text>
+<circle cx="840.0" cy="160" r="11" fill="#C0392B"/>
+<text x="840.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">6</text>
+<line x1="790" y1="530" x2="835" y2="585" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<text x="800" y="470" font-size="11" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">flag appears →</text>
+<line x1="960" y1="245" x2="960" y2="560" stroke="#C0392B" stroke-width="3" stroke-dasharray="2 5"/>
+<text x="968" y="400" font-size="11" fill="#C0392B" text-anchor="start" font-style="italic" font-family="Segoe UI, Helvetica, Arial, sans-serif">waiting …</text>
+<rect x="835.0" y="560" width="250" height="102" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="847.0" y="582" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">prepare</text>
+<text x="847.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">copy orapw, write tnsnames,</text>
+<text x="847.0" y="619" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">listener with static entry</text>
+<text x="847.0" y="636" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">mkdir the primary's paths</text>
+<text x="847.0" y="653" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">startup nomount (db_name only)</text>
+<circle cx="835.0" cy="560" r="11" fill="#C0392B"/>
+<text x="835.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">7</text>
+<rect x="825.0" y="680" width="270" height="102" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="837.0" y="702" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">RMAN duplicate</text>
+<text x="837.0" y="722" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">for standby from active database</text>
+<text x="837.0" y="739" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">spfile set db_unique_name</text>
+<text x="837.0" y="756" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  = ORCLCDB_STBY … nofilenamecheck</text>
+<text x="837.0" y="773" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">10-30 minutes</text>
+<circle cx="825.0" cy="680" r="11" fill="#C0392B"/>
+<text x="825.0" y="684.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">8</text>
+<line x1="550" y1="735" x2="825" y2="735" stroke="#C0392B" stroke-width="2.2" marker-end="url(#aC0392B)"/>
+<text x="687.5" y="727" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">datafiles + controlfile over the network</text>
+<rect x="835.0" y="800" width="250" height="85" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="847.0" y="822" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">start apply</text>
+<text x="847.0" y="842" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby redo logs if missing</text>
+<text x="847.0" y="859" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">recover managed standby</text>
+<text x="847.0" y="876" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  database disconnect  (MRP0)</text>
+<circle cx="835.0" cy="800" r="11" fill="#C0392B"/>
+<text x="835.0" y="804.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">9</text>
+<line x1="835" y1="880" x2="550" y2="880" stroke="#C0392B" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="692.5" y="872" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">enable dest 2 + archive log current</text>
+<rect x="290.0" y="850" width="260" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="872" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">redo shipping starts</text>
+<text x="302.0" y="892" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">dest 2 VALID → standby applies</text>
+<circle cx="290.0" cy="850" r="11" fill="#C0392B"/>
+<text x="290.0" y="854.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">P</text>
+<rect x="825.0" y="900" width="270" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="837.0" y="922" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">STANDBY IS READY</text>
+<text x="837.0" y="942" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">healthcheck: PHYSICAL STANDBY + MRP</text>
+<circle cx="825.0" cy="900" r="11" fill="#C0392B"/>
+<text x="825.0" y="904.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">10</text>
+<rect x="1090.0" y="160" width="180" height="68" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1102.0" y="182" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">restarting …</text>
+<text x="1102.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ping fails until the</text>
+<text x="1102.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary is open</text>
+<circle cx="1090.0" cy="160" r="11" fill="#2F9E5B"/>
+<text x="1090.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">T</text>
+<rect x="1090.0" y="560" width="180" height="85" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1102.0" y="582" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">serving :5004</text>
+<text x="1102.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">from step 5 on:</text>
+<text x="1102.0" y="619" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">30 tools as</text>
+<text x="1102.0" y="636" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">C##AGENT_READER</text>
+<circle cx="1090.0" cy="560" r="11" fill="#2F9E5B"/>
+<text x="1090.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">T</text>
+<text x="30" y="980" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Scripts: db/oracle-lab/primary/01-dataguard-primary.sh (sourced once by the image) · db/oracle-lab/standby/standby.sh (standby entrypoint) · healthcheck.sh</text>
+<text x="30" y="998" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">If RMAN fails: the standby keeps running and writes /opt/oracle/oradata/dbconfig/ORCLCDB_STBY/duplicate.log; restart it to try again.</text></svg>
+</div>
+<div class="tbl"><table><tr><th>Step</th><th>Where it is coded</th><th>Watch it with</th></tr>
+<tr><td>2 · create the CDB</td><td>the image (<code>createDB.sh</code>)</td><td><code>docker compose logs -f oracle-primary</code></td></tr>
+<tr><td>3-4 · Data Guard on the primary, hand-over</td><td><code>db/oracle-lab/primary/01-dataguard-primary.sh</code></td><td><code>… | grep db-agent</code></td></tr>
+<tr><td>6-10 · build and run the standby</td><td><code>db/oracle-lab/standby/standby.sh</code></td><td><code>docker compose logs -f oracle-standby</code></td></tr>
+<tr><td>health</td><td><code>db/oracle-lab/standby/healthcheck.sh</code></td><td><code>docker compose ps</code> → <code>(healthy)</code></td></tr>
+</table></div></section>
+
+<section id="redo"><h2>4 · Redo flow, and what the agent can see</h2>
+<p>Every change on the primary becomes redo. The transport process ships it ASYNC to the standby, which writes
+it to standby redo logs and applies it in real time (MRP). A mounted standby only accepts SYSDBA/SYSDG logins, so
+the agent reads everything <b>from the primary</b>, which tracks each standby's status, gaps and applied SCN.</p>
+<div class="fig"><svg role="img" aria-label="workflow-redo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 860" width="1280" height="860"><defs><marker id="a7B8794" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7B8794"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="860" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">Data Guard redo flow, and what the agent can see</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">All 30 tools run on the PRIMARY (a mounted standby only accepts SYSDBA/SYSDG logins).</text>
+<rect x="30" y="90" width="520" height="430" rx="14" fill="#FFF9F9" stroke="#C0392B" stroke-width="1.4" stroke-dasharray="8 5"/>
+<text x="44" y="112" font-size="13" fill="#52606D" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary  ·  ORCLCDB  ·  PRIMARY</text>
+<rect x="730" y="90" width="520" height="430" rx="14" fill="#FFF9F9" stroke="#C0392B" stroke-width="1.4" stroke-dasharray="8 5"/>
+<text x="744" y="112" font-size="13" fill="#52606D" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-standby  ·  ORCLCDB_STBY  ·  PHYSICAL STANDBY</text>
+<rect x="60" y="130" width="200" height="60" rx="10" fill="#E8F0FE" stroke="#3B6FD8" stroke-width="1.6"/>
+<text x="160.0" y="152" font-size="14" fill="#3B6FD8" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">sessions / DML</text>
+<text x="160.0" y="172" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">commits</text>
+<rect x="60" y="230" width="200" height="60" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="160.0" y="252" font-size="14" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">LGWR</text>
+<text x="160.0" y="272" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">writes redo</text>
+<rect x="60" y="330" width="200" height="70" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="160.0" y="352" font-size="14" fill="#D9822B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">online redo logs</text>
+<text x="160.0" y="372" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">redo01-03.log</text>
+<rect x="310" y="330" width="210" height="70" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="415.0" y="352" font-size="14" fill="#D9822B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">ARCn → archive_logs</text>
+<text x="415.0" y="372" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_dest_1</text>
+<rect x="310" y="230" width="210" height="60" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="415.0" y="252" font-size="14" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">TT (transport)</text>
+<text x="415.0" y="272" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">dest 2, ASYNC</text>
+<rect x="60" y="430" width="460" height="60" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="290.0" y="452" font-size="14" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">datafiles · controlfile</text>
+<text x="290.0" y="472" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">/opt/oracle/oradata/ORCLCDB</text>
+<line x1="160" y1="190" x2="160" y2="230" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="160" y1="290" x2="160" y2="330" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="260" y1="365" x2="310" y2="365" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="260" y1="260" x2="310" y2="260" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<rect x="760" y="230" width="210" height="60" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="865.0" y="252" font-size="14" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">RFS</text>
+<text x="865.0" y="272" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">receives redo</text>
+<rect x="760" y="330" width="210" height="70" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="865.0" y="352" font-size="14" fill="#D9822B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby redo logs</text>
+<text x="865.0" y="372" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">groups = online + 1</text>
+<rect x="1010" y="330" width="210" height="70" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="1115.0" y="352" font-size="14" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">MRP0</text>
+<text x="1115.0" y="372" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">real-time apply</text>
+<rect x="1010" y="230" width="210" height="60" rx="10" fill="#FFF4E0" stroke="#D9822B" stroke-width="1.6"/>
+<text x="1115.0" y="252" font-size="14" fill="#D9822B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">archived on standby</text>
+<text x="1115.0" y="272" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">after each log switch</text>
+<rect x="760" y="430" width="460" height="60" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="990.0" y="452" font-size="14" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">datafiles · controlfile (MOUNTED)</text>
+<text x="990.0" y="472" font-size="12.5" fill="#1F2933" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">same paths as the primary</text>
+<line x1="520" y1="260" x2="760" y2="260" stroke="#C0392B" stroke-width="2.4" marker-end="url(#aC0392B)"/>
+<text x="640.0" y="250" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">redo stream</text>
+<line x1="760" y1="300" x2="520" y2="300" stroke="#C0392B" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="640.0" y="318" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">FAL: missing sequences</text>
+<line x1="865" y1="290" x2="865" y2="330" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="970" y1="365" x2="1010" y2="365" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="970" y1="260" x2="1010" y2="260" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<line x1="1115" y1="400" x2="1115" y2="430" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<circle cx="640" cy="150" r="12" fill="#C0392B"/>
+<text x="640" y="155" font-size="14" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">✕</text>
+<text x="658" y="155" font-size="11.5" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif"></text>
+<text x="640" y="182" font-size="11.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby down</text>
+<text x="640" y="197" font-size="11.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">→ dest 2 ERROR</text>
+<circle cx="1125" cy="312" r="12" fill="#C0392B"/>
+<text x="1125" y="317" font-size="14" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">✕</text>
+<text x="1143" y="317" font-size="11.5" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">MRP stopped</text>
+<text x="30" y="560" font-size="16" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">What the agent reads on the primary — and which tool shows it</text>
+<rect x="30" y="586" width="1220" height="30" fill="#F5F7FA"/>
+<text x="42" y="606" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_health_check</text>
+<text x="330" y="606" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">one-shot verdict per standby: dest status, gap, recovery mode, apply lag (SCN → time)</text>
+<text x="42" y="636" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_destinations</text>
+<text x="330" y="636" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">GV$ARCHIVE_DEST(_STATUS): VALID / ERROR, error text, target, transport mode</text>
+<rect x="30" y="646" width="1220" height="30" fill="#F5F7FA"/>
+<text x="42" y="666" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_apply_progress</text>
+<text x="330" y="666" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">last archived vs last applied sequence per thread; logs behind</text>
+<text x="42" y="696" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_missing_logs</text>
+<text x="330" y="696" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">archive gap: which sequences the standby is missing (RESOLVABLE / UNRESOLVABLE)</text>
+<rect x="30" y="706" width="1220" height="30" fill="#F5F7FA"/>
+<text x="42" y="726" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_messages</text>
+<text x="330" y="726" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">V$DATAGUARD_STATUS: recent Data Guard errors and warnings</text>
+<text x="42" y="756" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_standby_redo_logs</text>
+<text x="330" y="756" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby redo log groups and sizes (needed for real-time apply)</text>
+<rect x="30" y="766" width="1220" height="30" fill="#F5F7FA"/>
+<text x="42" y="786" font-size="13" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Consolas, DejaVu Sans Mono, monospace">dg_parameters · dg_redo_rate</text>
+<text x="330" y="786" font-size="13" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_* / fal_* settings; redo generated per hour (explains lag)</text>
+<text x="30" y="826" font-size="12.5" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Typical findings:  dest 2 ERROR ORA-12541 (standby down)  ·  RECOVERY_MODE = IDLE (MRP stopped)  ·  GAP_STATUS = RESOLVABLE GAP  ·  apply lag growing while redo rate is high</text>
+<text x="30" y="848" font-size="12.5" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">The agent explains the cause and gives the DBA commands; it never runs them (approved actions are phase 2).</text></svg>
+</div>
+<p>Try it: stop apply on the standby, or stop the standby container, then ask <i>"Is Data Guard healthy?"</i>.
+<code>ORACLE-LAB.md</code> → <i>Break it on purpose</i> has the commands.</p></section>
+
+<section id="ports"><h2>5 · Ports and names</h2>
+<div class="tbl"><table>
+<tr><th>Service (container)</th><th>Inside Docker</th><th>On the VM</th><th>Login used by the agent</th></tr>
+<tr><td><code>db</code> PostgreSQL 16</td><td>db:5432</td><td>127.0.0.1:5432</td><td><code>agent_reader</code></td></tr>
+<tr><td><code>mysql</code> MySQL 8.4</td><td>mysql:3306</td><td>127.0.0.1:3306</td><td><code>agent_reader</code></td></tr>
+<tr><td><code>mariadb</code> MariaDB 11.4</td><td>mariadb:3306</td><td>127.0.0.1:3307</td><td><code>agent_reader</code></td></tr>
+<tr><td><code>oracle-primary</code></td><td>oracle-primary:1521 · service <code>ORCLCDB.localdomain</code></td><td>127.0.0.1:1531</td><td><code>C##AGENT_READER</code></td></tr>
+<tr><td><code>oracle-standby</code></td><td>oracle-standby:1521 · service <code>ORCLCDB_STBY</code></td><td>127.0.0.1:1532</td><td>none (SYSDBA only)</td></tr>
+<tr><td><code>toolbox</code> / <code>-mysql</code> / <code>-mariadb</code> / <code>-oracle-prod</code></td><td>:5000</td><td>127.0.0.1:5000 / 5001 / 5002 / 5004</td><td>-</td></tr>
+<tr><td>web UI (Streamlit)</td><td>-</td><td>127.0.0.1:8501 (SSH tunnel)</td><td>-</td></tr>
+</table></div></section>
+<footer>Diagrams are generated by <code>docs/make_diagrams.py</code> (SVGs in <code>docs/</code>). Edit and re-run to change them.</footer>
+</main></body></html>

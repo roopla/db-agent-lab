@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1010" width="1280" height="1010"><defs><marker id="a7B8794" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7B8794"/></marker><marker id="aC0392B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C0392B"/></marker></defs><rect width="1280" height="1010" fill="#FFFFFF"/>
+<text x="30" y="42" font-size="22" fill="#1F2933" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">How the Data Guard lab builds itself (first docker compose up)</text>
+<text x="30" y="66" font-size="14" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Time runs downward. Later starts skip straight to “open / mount + apply” (about a minute).</text>
+<rect x="30" y="90" width="200" height="40" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="130" y="115" font-size="13.5" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-init</text>
+<line x1="130" y1="130" x2="130" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="320" y="90" width="200" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="420" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-primary</text>
+<line x1="420" y1="130" x2="420" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="590" y="90" width="200" height="40" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="690" y="115" font-size="13.5" fill="#7B8794" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">orashared volume</text>
+<line x1="690" y1="130" x2="690" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="860" y="90" width="200" height="40" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="960" y="115" font-size="13.5" fill="#C0392B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">oracle-standby</text>
+<line x1="960" y1="130" x2="960" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="1080" y="90" width="200" height="40" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1180" y="115" font-size="13.5" fill="#2F9E5B" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">toolbox-oracle-prod</text>
+<line x1="1180" y1="130" x2="1180" y2="950" stroke="#CBD2D9" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="25.0" y="150" width="210" height="51" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="37.0" y="172" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">chown orashared</text>
+<text x="37.0" y="192" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">to oracle:oinstall, exit 0</text>
+<circle cx="25.0" cy="150" r="11" fill="#7B8794"/>
+<text x="25.0" y="154.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">1</text>
+<text x="130" y="232" font-size="11.5" fill="#52606D" text-anchor="middle" font-style="italic" font-family="Segoe UI, Helvetica, Arial, sans-serif">~1 min</text>
+<rect x="295.0" y="160" width="250" height="85" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="307.0" y="182" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">createDB.sh (image)</text>
+<text x="307.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">dbca: CDB ORCLCDB + PDB ORCLPDB1</text>
+<text x="307.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ENABLE_ARCHIVELOG=true</text>
+<text x="307.0" y="236" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">15-40 minutes</text>
+<circle cx="295.0" cy="160" r="11" fill="#C0392B"/>
+<text x="295.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">2</text>
+<line x1="130" y1="205" x2="295" y2="205" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<rect x="290.0" y="285" width="260" height="153" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="307" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">01-dataguard-primary.sh</text>
+<text x="302.0" y="327" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">force logging</text>
+<text x="302.0" y="344" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby_file_management=AUTO</text>
+<text x="302.0" y="361" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_config DG_CONFIG</text>
+<text x="302.0" y="378" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">log_archive_dest_2 → DG_STANDBY</text>
+<text x="302.0" y="395" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">fal_server, standby redo logs</text>
+<text x="302.0" y="412" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">tnsnames DG_PRIMARY/STANDBY</text>
+<text x="302.0" y="429" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">create C##AGENT_READER</text>
+<circle cx="290.0" cy="285" r="11" fill="#C0392B"/>
+<text x="290.0" y="289.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">3</text>
+<rect x="590.0" y="480" width="200" height="85" rx="10" fill="#F5F7FA" stroke="#7B8794" stroke-width="1.6"/>
+<text x="602.0" y="502" font-size="14" fill="#7B8794" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">hand-over files</text>
+<text x="602.0" y="522" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">orapwORCLCDB</text>
+<text x="602.0" y="539" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary_service</text>
+<text x="602.0" y="556" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary_ready</text>
+<circle cx="590.0" cy="480" r="11" fill="#7B8794"/>
+<text x="590.0" y="484.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">4</text>
+<line x1="550" y1="500" x2="590" y2="500" stroke="#7B8794" stroke-width="1.8" marker-end="url(#a7B8794)"/>
+<text x="570.0" y="494.0" font-size="11" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">copy</text>
+<rect x="290.0" y="560" width="260" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="582" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">DATABASE IS READY</text>
+<text x="302.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">open READ WRITE, listener up</text>
+<circle cx="290.0" cy="560" r="11" fill="#C0392B"/>
+<text x="290.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">5</text>
+<rect x="840.0" y="160" width="240" height="68" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="852.0" y="182" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">wait for primary_ready</text>
+<text x="852.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">polls the shared volume</text>
+<text x="852.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">every 30 s</text>
+<circle cx="840.0" cy="160" r="11" fill="#C0392B"/>
+<text x="840.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">6</text>
+<line x1="790" y1="530" x2="835" y2="585" stroke="#7B8794" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#a7B8794)"/>
+<text x="800" y="470" font-size="11" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">flag appears →</text>
+<line x1="960" y1="245" x2="960" y2="560" stroke="#C0392B" stroke-width="3" stroke-dasharray="2 5"/>
+<text x="968" y="400" font-size="11" fill="#C0392B" text-anchor="start" font-style="italic" font-family="Segoe UI, Helvetica, Arial, sans-serif">waiting …</text>
+<rect x="835.0" y="560" width="250" height="102" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="847.0" y="582" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">prepare</text>
+<text x="847.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">copy orapw, write tnsnames,</text>
+<text x="847.0" y="619" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">listener with static entry</text>
+<text x="847.0" y="636" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">mkdir the primary's paths</text>
+<text x="847.0" y="653" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">startup nomount (db_name only)</text>
+<circle cx="835.0" cy="560" r="11" fill="#C0392B"/>
+<text x="835.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">7</text>
+<rect x="825.0" y="680" width="270" height="102" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="837.0" y="702" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">RMAN duplicate</text>
+<text x="837.0" y="722" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">for standby from active database</text>
+<text x="837.0" y="739" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">spfile set db_unique_name</text>
+<text x="837.0" y="756" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  = ORCLCDB_STBY … nofilenamecheck</text>
+<text x="837.0" y="773" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">10-30 minutes</text>
+<circle cx="825.0" cy="680" r="11" fill="#C0392B"/>
+<text x="825.0" y="684.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">8</text>
+<line x1="550" y1="735" x2="825" y2="735" stroke="#C0392B" stroke-width="2.2" marker-end="url(#aC0392B)"/>
+<text x="687.5" y="727" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">datafiles + controlfile over the network</text>
+<rect x="835.0" y="800" width="250" height="85" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="847.0" y="822" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">start apply</text>
+<text x="847.0" y="842" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">standby redo logs if missing</text>
+<text x="847.0" y="859" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">recover managed standby</text>
+<text x="847.0" y="876" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">  database disconnect  (MRP0)</text>
+<circle cx="835.0" cy="800" r="11" fill="#C0392B"/>
+<text x="835.0" y="804.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">9</text>
+<line x1="835" y1="880" x2="550" y2="880" stroke="#C0392B" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#aC0392B)"/>
+<text x="692.5" y="872" font-size="11.5" fill="#52606D" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">enable dest 2 + archive log current</text>
+<rect x="290.0" y="850" width="260" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="302.0" y="872" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">redo shipping starts</text>
+<text x="302.0" y="892" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">dest 2 VALID → standby applies</text>
+<circle cx="290.0" cy="850" r="11" fill="#C0392B"/>
+<text x="290.0" y="854.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">P</text>
+<rect x="825.0" y="900" width="270" height="51" rx="10" fill="#FDECEC" stroke="#C0392B" stroke-width="1.6"/>
+<text x="837.0" y="922" font-size="14" fill="#C0392B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">STANDBY IS READY</text>
+<text x="837.0" y="942" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">healthcheck: PHYSICAL STANDBY + MRP</text>
+<circle cx="825.0" cy="900" r="11" fill="#C0392B"/>
+<text x="825.0" y="904.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">10</text>
+<rect x="1090.0" y="160" width="180" height="68" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1102.0" y="182" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">restarting …</text>
+<text x="1102.0" y="202" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">ping fails until the</text>
+<text x="1102.0" y="219" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">primary is open</text>
+<circle cx="1090.0" cy="160" r="11" fill="#2F9E5B"/>
+<text x="1090.0" y="164.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">T</text>
+<rect x="1090.0" y="560" width="180" height="85" rx="10" fill="#E6F6EC" stroke="#2F9E5B" stroke-width="1.6"/>
+<text x="1102.0" y="582" font-size="14" fill="#2F9E5B" text-anchor="start" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">serving :5004</text>
+<text x="1102.0" y="602" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">from step 5 on:</text>
+<text x="1102.0" y="619" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">30 tools as</text>
+<text x="1102.0" y="636" font-size="12" fill="#1F2933" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">C##AGENT_READER</text>
+<circle cx="1090.0" cy="560" r="11" fill="#2F9E5B"/>
+<text x="1090.0" y="564.5" font-size="12" fill="#FFFFFF" text-anchor="middle" font-weight="bold" font-family="Segoe UI, Helvetica, Arial, sans-serif">T</text>
+<text x="30" y="980" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">Scripts: db/oracle-lab/primary/01-dataguard-primary.sh (sourced once by the image) · db/oracle-lab/standby/standby.sh (standby entrypoint) · healthcheck.sh</text>
+<text x="30" y="998" font-size="12" fill="#52606D" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif">If RMAN fails: the standby keeps running and writes /opt/oracle/oradata/dbconfig/ORCLCDB_STBY/duplicate.log; restart it to try again.</text></svg>

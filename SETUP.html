@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>db-agent setup guide</title><style>
+:root{--ink:#1F2933;--sub:#52606D;--line:#D9E2EC;--bg:#FFFFFF;--code:#F5F7FA;--accent:#3B6FD8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 'Segoe UI',Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:22px;margin:36px 0 12px}
+h3{font-size:18px;margin:28px 0 8px}
+a{color:var(--accent)}
+p,li{max-width:80ch}
+img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;margin:12px 0 20px;font-size:14px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#F0F4F8}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13.5px/1.5 Consolas,'DejaVu Sans Mono',monospace}
+pre{background:#1F2933;color:#E4E7EB;padding:14px 16px;border-radius:8px;overflow-x:auto}
+pre code{background:none;color:inherit;padding:0}
+p code,li code,td code{overflow-wrap:anywhere}
+blockquote{margin:16px 0;padding:10px 16px;background:#FFF8E6;border-left:4px solid #D9822B;border-radius:4px}
+blockquote p{margin:4px 0}
+hr{border:none;border-top:1px solid var(--line);margin:28px 0}
+</style></head>
+<body><main>
+<h1 id="db-agent-setup-guide-uv-docker">db-agent: setup guide (uv + Docker)</h1>
+<p>Ask your databases questions in plain English. A LangChain agent turns each question into
+read-only queries through <strong>MCP Toolbox for Databases</strong> (one Toolbox server per database)
+and answers in plain English. Everything runs in Docker Compose on one Linux machine:</p>
+<ul>
+<li>three demo databases with sample data: <strong>PostgreSQL, MySQL, MariaDB</strong></li>
+<li>an <strong>Oracle 19c Data Guard lab</strong>: a primary and a physical standby, built from scratch
+  from your Oracle image, with 30 performance, space and Data Guard tools (<code>oracle_prod</code>)</li>
+</ul>
+<p>The Python side is managed with <strong>uv</strong>. The model can be OpenAI or any OpenAI-compatible
+gateway (for example your in-house Open WebUI).</p>
+<p>This guide takes you from an empty machine (a VirtualBox VM in your home lab, or a cloud
+VM) to a working agent. Every step says what you should see, so you know it worked
+before moving on.</p>
+<p><strong>Other guides:</strong> <code>ARCHITECTURE.html</code> (diagrams and workflows) · <code>ORACLE-LAB.md</code> (the
+Data Guard lab in detail) · <code>ORACLE-PROD.md</code> (the 30 Oracle tools; pointing at a real
+primary) · <code>ADMIN-ACTIONS-DESIGN.md</code> (planned approved actions).</p>
+<hr />
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#1-architecture">Architecture</a></li>
+<li><a href="#2-what-you-need">What you need</a></li>
+<li><a href="#3-create-the-vm">Create the VM</a></li>
+<li><a href="#4-install-docker-uv-and-unzip">Install Docker, uv and unzip</a></li>
+<li><a href="#5-copy-the-project-and-the-oracle-image">Copy the project and the Oracle image</a></li>
+<li><a href="#6-create-the-settings-file-env">Create the settings file (.env)</a></li>
+<li><a href="#7-install-the-python-side-with-uv">Install the Python side with uv</a></li>
+<li><a href="#8-start-everything">Start everything</a></li>
+<li><a href="#9-check-everything-is-connected">Check everything is connected</a></li>
+<li><a href="#10-chat-in-the-terminal">Chat in the terminal</a></li>
+<li><a href="#11-use-the-web-ui">Use the web UI</a></li>
+<li><a href="#12-day-to-day-operations">Day-to-day operations</a></li>
+<li><a href="#13-troubleshooting">Troubleshooting</a></li>
+<li><a href="#14-how-it-works">How it works</a></li>
+<li><a href="#15-security-model">Security model</a></li>
+<li><a href="#16-adding-your-own-database">Adding your own database</a></li>
+<li><a href="#17-project-layout">Project layout</a></li>
+</ol>
+<hr />
+<h2 id="1-architecture">1. Architecture</h2>
+<p><img alt="Architecture" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjgwIDkwMCIgd2lkdGg9IjEyODAiIGhlaWdodD0iOTAwIj48ZGVmcz48bWFya2VyIGlkPSJhM0I2RkQ4IiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj48cGF0aCBkPSJNMCwwIEwxMCw1IEwwLDEwIHoiIGZpbGw9IiMzQjZGRDgiLz48L21hcmtlcj48bWFya2VyIGlkPSJhN0I4Nzk0IiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj48cGF0aCBkPSJNMCwwIEwxMCw1IEwwLDEwIHoiIGZpbGw9IiM3Qjg3OTQiLz48L21hcmtlcj48bWFya2VyIGlkPSJhOEU0NEFEIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj48cGF0aCBkPSJNMCwwIEwxMCw1IEwwLDEwIHoiIGZpbGw9IiM4RTQ0QUQiLz48L21hcmtlcj48bWFya2VyIGlkPSJhQzAzOTJCIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjkiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj48cGF0aCBkPSJNMCwwIEwxMCw1IEwwLDEwIHoiIGZpbGw9IiNDMDM5MkIiLz48L21hcmtlcj48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyODAiIGhlaWdodD0iOTAwIiBmaWxsPSIjRkZGRkZGIi8+Cjx0ZXh0IHg9IjMwIiB5PSI0MiIgZm9udC1zaXplPSIyMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5kYi1hZ2VudCBhcmNoaXRlY3R1cmU8L3RleHQ+Cjx0ZXh0IHg9IjMwIiB5PSI2NiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzUyNjA2RCIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPkRvY2tlciBDb21wb3NlIG9uIG9uZSBMaW51eCBWTSAoVmlydHVhbEJveCBob21lIGxhYiBvciBjbG91ZCkuIEV2ZXJ5IHBvcnQgaXMgYm91bmQgdG8gMTI3LjAuMC4xLjwvdGV4dD4KPHJlY3QgeD0iMzAiIHk9IjEzMCIgd2lkdGg9IjIzMCIgaGVpZ2h0PSIxMTAiIHJ4PSIxMCIgZmlsbD0iI0VFRjJGNiIgc3Ryb2tlPSIjNTI2MDZEIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI0MiIgeT0iMTUyIiBmb250LXNpemU9IjE0IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPllvdXIgbGFwdG9wPC90ZXh0Pgo8dGV4dCB4PSI0MiIgeT0iMTcyIiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5icm93c2VyICBodHRwOi8vbG9jYWxob3N0Ojg1MDE8L3RleHQ+Cjx0ZXh0IHg9IjQyIiB5PSIxODkiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnRlcm1pbmFsIChzc2gpPC90ZXh0Pgo8dGV4dCB4PSI0MiIgeT0iMjA2IiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5zc2ggLUwgODUwMTpsb2NhbGhvc3Q6ODUwMTwvdGV4dD4KPHJlY3QgeD0iMzAiIHk9IjQ3MCIgd2lkdGg9IjIzMCIgaGVpZ2h0PSIxNzAiIHJ4PSIxMCIgZmlsbD0iI0YzRThGRCIgc3Ryb2tlPSIjOEU0NEFEIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI0MiIgeT0iNDkyIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOEU0NEFEIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPk1vZGVsIChIVFRQUyk8L3RleHQ+Cjx0ZXh0IHg9IjQyIiB5PSI1MTIiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPk9wZW5BSSAgYXBpLm9wZW5haS5jb208L3RleHQ+Cjx0ZXh0IHg9IjQyIiB5PSI1MjkiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPiAg4oCUIG9yIOKAlDwvdGV4dD4KPHRleHQgeD0iNDIiIHk9IjU0NiIgZm9udC1zaXplPSIxMi41IiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+T3BlbiBXZWJVSSAvYXBpPC90ZXh0Pgo8dGV4dCB4PSI0MiIgeT0iNTYzIiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj4oaW4taG91c2UgdkxMTSwgZ3B0LW9zcyDigKYpPC90ZXh0Pgo8dGV4dCB4PSI0MiIgeT0iNTgwIiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj48L3RleHQ+Cjx0ZXh0IHg9IjQyIiB5PSI1OTciIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPk9QRU5BSV9CQVNFX1VSTCBpbiAuZW52PC90ZXh0Pgo8cmVjdCB4PSIyOTAiIHk9Ijg1IiB3aWR0aD0iOTYwIiBoZWlnaHQ9Ijc5NSIgcng9IjE0IiBmaWxsPSIjRkNGQ0ZEIiBzdHJva2U9IiM1MjYwNkQiIHN0cm9rZS13aWR0aD0iMS40IiBzdHJva2UtZGFzaGFycmF5PSI4IDUiLz4KPHRleHQgeD0iMzA0IiB5PSIxMDciIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiM1MjYwNkQiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+TGludXggVk0gwrcgVWJ1bnR1IDI0LjA0IMK3IDE2IEdCIFJBTSDCtyA0IHZDUFUgwrcgMTAwIEdCPC90ZXh0Pgo8cmVjdCB4PSIzMjAiIHk9IjEzMCIgd2lkdGg9IjI3MCIgaGVpZ2h0PSIyNTAiIHJ4PSIxMCIgZmlsbD0iI0U4RjBGRSIgc3Ryb2tlPSIjM0I2RkQ4IiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSIzMzIiIHk9IjE1MiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzNCNkZEOCIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5QeXRob24gYXBwICAodXYgwrcgLnZlbnYpPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjE3MiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPmFwcC9hZ2VudC5weSAgIHRlcm1pbmFsIGNoYXQ8L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iMTg5IiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+YXBwL2FwcC5weSAgICAgd2ViIFVJICA6ODUwMTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSIyMDYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5MYW5nQ2hhaW4gY3JlYXRlX2FnZW50PC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjIyMyIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPm9uZSBzcGVjaWFsaXN0IHBlciBkYXRhYmFzZTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSIyNDAiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5kYXRhYmFzZXMudG9tbDogZGlhbGVjdCArIG5vdGVzPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjI1NyIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPiAgKG9yYWNsZV9wcm9kOiBERyBydW5ib29rKTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSIyNzQiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5tb2RlbCBwaWNrZXI6IC9tb2RlbHM8L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iMjkxIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+Z3VhcmRzOiA0LVNRTCBjYXAsIHdyaXRlIHJlZnVzYWwsPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjMwOCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPiAgZXh0ZXJuYWwtbW9kZWwgYmxvY2s8L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iMzI1IiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+PC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjM0MiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPuKGkiBNQ1Agb3ZlciBIVFRQIHRvIGVhY2ggVG9vbGJveDwvdGV4dD4KPGxpbmUgeDE9IjI2MCIgeTE9IjE5MCIgeDI9IjMyMCIgeTI9IjE5MCIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuOCIgbWFya2VyLWVuZD0idXJsKCNhN0I4Nzk0KSIvPgo8dGV4dCB4PSIyOTAiIHk9IjE4MiIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPlNTSCB0dW5uZWw8L3RleHQ+CjxsaW5lIHgxPSIzMjAiIHkxPSIzNDAiIHgyPSIyNjAiIHkyPSI1NDAiIHN0cm9rZT0iIzhFNDRBRCIgc3Ryb2tlLXdpZHRoPSIxLjgiIG1hcmtlci1lbmQ9InVybCgjYThFNDRBRCkiLz4KPHRleHQgeD0iMjgyIiB5PSI0MjUiIGZvbnQtc2l6ZT0iMTAuNSIgZmlsbD0iIzUyNjA2RCIgdGV4dC1hbmNob3I9ImVuZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5jaGF0ICs8L3RleHQ+Cjx0ZXh0IHg9IjI4MiIgeT0iNDM5IiBmb250LXNpemU9IjEwLjUiIGZpbGw9IiM1MjYwNkQiIHRleHQtYW5jaG9yPSJlbmQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+dG9vbCBjYWxsczwvdGV4dD4KPHJlY3QgeD0iMzIwIiB5PSI0MjAiIHdpZHRoPSIyNzAiIGhlaWdodD0iMjA1IiByeD0iMTAiIGZpbGw9IiNGRkZCRUEiIHN0cm9rZT0iI0M5QTIyNyIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iMzMyIiB5PSI0NDIiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiNDOUEyMjciIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+UmVhZC1vbmx5IGJ5IGRlc2lnbjwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI0NjIiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5Ub29sYm94IGxvZ3MgaW4gYXMgYWdlbnRfcmVhZGVyIC88L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iNDc5IiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+QyMjQUdFTlRfUkVBREVSOiBTRUxFQ1QgKyBtb25pdG9yaW5nPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjQ5NiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPlRoZSBkYXRhYmFzZSByZWZ1c2VzIHdyaXRlcy48L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iNTEzIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+QWRtaW4vU1lTOiBzZXR1cCBzY3JpcHRzIG9ubHkuPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjUzMCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPm9yYWNsZV9wcm9kOiBpbi1ob3VzZSBtb2RlbHMgb25seTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI1NDciIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj4gIChsYWI6IEFMTE9XX0VYVEVSTkFMX01PREVMU19GT1IpPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjU2NCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPlNlY3JldHMgaW4gLmVudiAoY2htb2QgNjAwKTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI1ODEiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5XZWIgVUkgb25seSB2aWEgU1NIIHR1bm5lbDwvdGV4dD4KPHJlY3QgeD0iMzIwIiB5PSI2NjAiIHdpZHRoPSIyNzAiIGhlaWdodD0iMTUwIiByeD0iMTAiIGZpbGw9IiNGNUY3RkEiIHN0cm9rZT0iIzdCODc5NCIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iMzMyIiB5PSI2ODIiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM3Qjg3OTQiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+RG9ja2VyIHZvbHVtZXM8L3RleHQ+Cjx0ZXh0IHg9IjMzMiIgeT0iNzAyIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJDb25zb2xhcywgRGVqYVZ1IFNhbnMgTW9ubywgbW9ub3NwYWNlIj5wZ2RhdGEgwrcgbXlzcWxkYXRhIMK3IG1hcmlhZGJkYXRhPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9IjcxOSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iQ29uc29sYXMsIERlamFWdSBTYW5zIE1vbm8sIG1vbm9zcGFjZSI+b3JhcHJpbWFyeSAgIHByaW1hcnkgZGF0YWZpbGVzLDwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI3MzYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IkNvbnNvbGFzLCBEZWphVnUgU2FucyBNb25vLCBtb25vc3BhY2UiPiAgICAgICAgICAgICBzcGZpbGUsIGFyY2hpdmUgbG9nczwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI3NTMiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IkNvbnNvbGFzLCBEZWphVnUgU2FucyBNb25vLCBtb25vc3BhY2UiPm9yYXN0YW5kYnkgICBzdGFuZGJ5IGZpbGVzICsgY29uZmlnPC90ZXh0Pgo8dGV4dCB4PSIzMzIiIHk9Ijc3MCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iQ29uc29sYXMsIERlamFWdSBTYW5zIE1vbm8sIG1vbm9zcGFjZSI+b3Jhc2hhcmVkICAgIG9yYXB3ICsgcHJpbWFyeV9yZWFkeTwvdGV4dD4KPHRleHQgeD0iMzMyIiB5PSI3ODciIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IkNvbnNvbGFzLCBEZWphVnUgU2FucyBNb25vLCBtb25vc3BhY2UiPiAgICAgICAgICAgICAoaGFuZC1vdmVyIHRvIHN0YW5kYnkpPC90ZXh0Pgo8cmVjdCB4PSI2MjAiIHk9IjEyMCIgd2lkdGg9IjYxMCIgaGVpZ2h0PSI3NDUiIHJ4PSIxNCIgZmlsbD0iI0Y3RjlGQiIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuNCIgc3Ryb2tlLWRhc2hhcnJheT0iOCA1Ii8+Cjx0ZXh0IHg9IjYzNCIgeT0iMTQyIiBmb250LXNpemU9IjEzIiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPkRvY2tlciBDb21wb3NlIMK3IG5ldHdvcmsgdG9vbC1uZXR3b3JrPC90ZXh0Pgo8dGV4dCB4PSI3NjAiIHk9IjE2MCIgZm9udC1zaXplPSIxMi41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5NQ1AgVG9vbGJveCAob25lIHBlciBEQik8L3RleHQ+Cjx0ZXh0IHg9IjEwNzUiIHk9IjE2MCIgZm9udC1zaXplPSIxMi41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5EYXRhYmFzZXM8L3RleHQ+CjxyZWN0IHg9IjY1MCIgeT0iMTcyIiB3aWR0aD0iMjIwIiBoZWlnaHQ9IjY2IiByeD0iMTAiIGZpbGw9IiNFNkY2RUMiIHN0cm9rZT0iIzJGOUU1QiIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iNjYyIiB5PSIxOTQiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiMyRjlFNUIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+dG9vbGJveCAgOjUwMDA8L3RleHQ+Cjx0ZXh0IHg9IjY2MiIgeT0iMjE0IiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5Qb3N0Z3JlcyDCtyAzMiB0b29sczwvdGV4dD4KPHJlY3QgeD0iOTU1IiB5PSIxNzIiIHdpZHRoPSIyNDUiIGhlaWdodD0iNjYiIHJ4PSIxMCIgZmlsbD0iI0ZGRjRFMCIgc3Ryb2tlPSIjRDk4MjJCIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI5NjciIHk9IjE5NCIgZm9udC1zaXplPSIxNCIgZmlsbD0iI0Q5ODIyQiIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5kYiAgUG9zdGdyZVNRTCAxNjwvdGV4dD4KPHRleHQgeD0iOTY3IiB5PSIyMTQiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnNob3AgIMK3ICA6NTQzMjwvdGV4dD4KPGxpbmUgeDE9Ijg3MCIgeTE9IjIwNSIgeDI9Ijk1NSIgeTI9IjIwNSIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuOCIgbWFya2VyLWVuZD0idXJsKCNhN0I4Nzk0KSIvPgo8dGV4dCB4PSI5MTIuNSIgeT0iMTk5LjAiIGZvbnQtc2l6ZT0iMTAuNSIgZmlsbD0iIzUyNjA2RCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5yZWFkLW9ubHk8L3RleHQ+CjxsaW5lIHgxPSI1OTAiIHkxPSIyNTUiIHgyPSI2NTAiIHkyPSIyMDUiIHN0cm9rZT0iIzNCNkZEOCIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYTNCNkZEOCkiLz4KPHJlY3QgeD0iNjUwIiB5PSIyNjAiIHdpZHRoPSIyMjAiIGhlaWdodD0iNjYiIHJ4PSIxMCIgZmlsbD0iI0U2RjZFQyIgc3Ryb2tlPSIjMkY5RTVCIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI2NjIiIHk9IjI4MiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzJGOUU1QiIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj50b29sYm94LW15c3FsICA6NTAwMTwvdGV4dD4KPHRleHQgeD0iNjYyIiB5PSIzMDIiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPk15U1FMIMK3IDkgdG9vbHM8L3RleHQ+CjxyZWN0IHg9Ijk1NSIgeT0iMjYwIiB3aWR0aD0iMjQ1IiBoZWlnaHQ9IjY2IiByeD0iMTAiIGZpbGw9IiNGRkY0RTAiIHN0cm9rZT0iI0Q5ODIyQiIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iOTY3IiB5PSIyODIiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiNEOTgyMkIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+bXlzcWwgIE15U1FMIDguNDwvdGV4dD4KPHRleHQgeD0iOTY3IiB5PSIzMDIiIGZvbnQtc2l6ZT0iMTIuNSIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPmludmVudG9yeSAgwrcgIDozMzA2PC90ZXh0Pgo8bGluZSB4MT0iODcwIiB5MT0iMjkzIiB4Mj0iOTU1IiB5Mj0iMjkzIiBzdHJva2U9IiM3Qjg3OTQiIHN0cm9rZS13aWR0aD0iMS44IiBtYXJrZXItZW5kPSJ1cmwoI2E3Qjg3OTQpIi8+Cjx0ZXh0IHg9IjkxMi41IiB5PSIyODcuMCIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnJlYWQtb25seTwvdGV4dD4KPGxpbmUgeDE9IjU5MCIgeTE9IjI1NSIgeDI9IjY1MCIgeTI9IjI5MyIgc3Ryb2tlPSIjM0I2RkQ4IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhM0I2RkQ4KSIvPgo8cmVjdCB4PSI2NTAiIHk9IjM0OCIgd2lkdGg9IjIyMCIgaGVpZ2h0PSI2NiIgcng9IjEwIiBmaWxsPSIjRTZGNkVDIiBzdHJva2U9IiMyRjlFNUIiIHN0cm9rZS13aWR0aD0iMS42Ii8+Cjx0ZXh0IHg9IjY2MiIgeT0iMzcwIiBmb250LXNpemU9IjE0IiBmaWxsPSIjMkY5RTVCIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnRvb2xib3gtbWFyaWFkYiAgOjUwMDI8L3RleHQ+Cjx0ZXh0IHg9IjY2MiIgeT0iMzkwIiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5NYXJpYURCIMK3IDkgdG9vbHM8L3RleHQ+CjxyZWN0IHg9Ijk1NSIgeT0iMzQ4IiB3aWR0aD0iMjQ1IiBoZWlnaHQ9IjY2IiByeD0iMTAiIGZpbGw9IiNGRkY0RTAiIHN0cm9rZT0iI0Q5ODIyQiIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iOTY3IiB5PSIzNzAiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiNEOTgyMkIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+bWFyaWFkYiAgTWFyaWFEQiAxMS40PC90ZXh0Pgo8dGV4dCB4PSI5NjciIHk9IjM5MCIgZm9udC1zaXplPSIxMi41IiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+c3VwcG9ydCAgwrcgIDozMzA3PC90ZXh0Pgo8bGluZSB4MT0iODcwIiB5MT0iMzgxIiB4Mj0iOTU1IiB5Mj0iMzgxIiBzdHJva2U9IiM3Qjg3OTQiIHN0cm9rZS13aWR0aD0iMS44IiBtYXJrZXItZW5kPSJ1cmwoI2E3Qjg3OTQpIi8+Cjx0ZXh0IHg9IjkxMi41IiB5PSIzNzUuMCIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnJlYWQtb25seTwvdGV4dD4KPGxpbmUgeDE9IjU5MCIgeTE9IjI1NSIgeDI9IjY1MCIgeTI9IjM4MSIgc3Ryb2tlPSIjM0I2RkQ4IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhM0I2RkQ4KSIvPgo8cmVjdCB4PSI2NDAiIHk9IjQ0MCIgd2lkdGg9IjU3NSIgaGVpZ2h0PSI0MDUiIHJ4PSIxMiIgZmlsbD0iI0ZGRjlGOSIgc3Ryb2tlPSIjQzAzOTJCIiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNSA0Ii8+Cjx0ZXh0IHg9IjY1NSIgeT0iNDYyIiBmb250LXNpemU9IjEyLjUiIGZpbGw9IiNDMDM5MkIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+T3JhY2xlIDE5YyBEYXRhIEd1YXJkIGxhYiAgIChwcm9maWxlcyBvcmFjbGUtbGFiICsgb3JhY2xlLXByb2QpPC90ZXh0Pgo8cmVjdCB4PSI2NTAiIHk9IjQ5MCIgd2lkdGg9IjIyMCIgaGVpZ2h0PSIxMDAiIHJ4PSIxMCIgZmlsbD0iI0U2RjZFQyIgc3Ryb2tlPSIjMkY5RTVCIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI2NjIiIHk9IjUxMiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzJGOUU1QiIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj50b29sYm94LW9yYWNsZS1wcm9kIDo1MDA0PC90ZXh0Pgo8dGV4dCB4PSI2NjIiIHk9IjUzMiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPjMwIHRvb2xzOiA4IERhdGEgR3VhcmQsPC90ZXh0Pgo8dGV4dCB4PSI2NjIiIHk9IjU0OSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPjEzIHBlcmZvcm1hbmNlLCA2IHNwYWNlLDwvdGV4dD4KPHRleHQgeD0iNjYyIiB5PSI1NjYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj4zIGdlbmVyYWw8L3RleHQ+CjxsaW5lIHgxPSI1OTAiIHkxPSIyNTUiIHgyPSI2NTAiIHkyPSI1NDAiIHN0cm9rZT0iIzNCNkZEOCIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYTNCNkZEOCkiLz4KPHJlY3QgeD0iOTU1IiB5PSI0ODAiIHdpZHRoPSIyNDUiIGhlaWdodD0iMTIwIiByeD0iMTAiIGZpbGw9IiNGREVDRUMiIHN0cm9rZT0iI0MwMzkyQiIgc3Ryb2tlLXdpZHRoPSIxLjYiLz4KPHRleHQgeD0iOTY3IiB5PSI1MDIiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiNDMDM5MkIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+b3JhY2xlLXByaW1hcnk8L3RleHQ+Cjx0ZXh0IHg9Ijk2NyIgeT0iNTIyIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+Q0RCIE9SQ0xDREIgwrcgUERCIE9SQ0xQREIxPC90ZXh0Pgo8dGV4dCB4PSI5NjciIHk9IjUzOSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPlBSSU1BUlkgwrcgUkVBRCBXUklURTwvdGV4dD4KPHRleHQgeD0iOTY3IiB5PSI1NTYiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5BUkNISVZFTE9HIMK3IEZPUkNFIExPR0dJTkc8L3RleHQ+Cjx0ZXh0IHg9Ijk2NyIgeT0iNTczIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+bG9jYWxob3N0OjE1MzE8L3RleHQ+CjxsaW5lIHgxPSI4NzAiIHkxPSI1NDAiIHgyPSI5NTUiIHkyPSI1NDAiIHN0cm9rZT0iIzdCODc5NCIgc3Ryb2tlLXdpZHRoPSIxLjgiIG1hcmtlci1lbmQ9InVybCgjYTdCODc5NCkiLz4KPHRleHQgeD0iOTEyLjUiIHk9IjUzNC4wIiBmb250LXNpemU9IjEwLjUiIGZpbGw9IiM1MjYwNkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+cmVhZC1vbmx5PC90ZXh0Pgo8cmVjdCB4PSI5NTUiIHk9IjY5MCIgd2lkdGg9IjI0NSIgaGVpZ2h0PSIxMjAiIHJ4PSIxMCIgZmlsbD0iI0ZERUNFQyIgc3Ryb2tlPSIjQzAzOTJCIiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI5NjciIHk9IjcxMiIgZm9udC1zaXplPSIxNCIgZmlsbD0iI0MwMzkyQiIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5vcmFjbGUtc3RhbmRieTwvdGV4dD4KPHRleHQgeD0iOTY3IiB5PSI3MzIiIGZvbnQtc2l6ZT0iMTIiIGZpbGw9IiMxRjI5MzMiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5PUkNMQ0RCX1NUQlk8L3RleHQ+Cjx0ZXh0IHg9Ijk2NyIgeT0iNzQ5IiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+UEhZU0lDQUwgU1RBTkRCWSDCtyBNT1VOVEVEPC90ZXh0Pgo8dGV4dCB4PSI5NjciIHk9Ijc2NiIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPk1SUCByZWFsLXRpbWUgYXBwbHk8L3RleHQ+Cjx0ZXh0IHg9Ijk2NyIgeT0iNzgzIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+bG9jYWxob3N0OjE1MzI8L3RleHQ+CjxsaW5lIHgxPSIxMDAwIiB5MT0iNjAwIiB4Mj0iMTAwMCIgeTI9IjY5MCIgc3Ryb2tlPSIjQzAzOTJCIiBzdHJva2Utd2lkdGg9IjIuMiIgbWFya2VyLWVuZD0idXJsKCNhQzAzOTJCKSIvPgo8dGV4dCB4PSIxMDA4IiB5PSI2MjIiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiNDMDM5MkIiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+cmVkbyBBU1lOQzwvdGV4dD4KPHRleHQgeD0iMTAwOCIgeT0iNjM2IiBmb250LXNpemU9IjEwLjUiIGZpbGw9IiM1MjYwNkQiIHRleHQtYW5jaG9yPSJzdGFydCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5kZXN0IDIg4oaSIERHX1NUQU5EQlk8L3RleHQ+CjxsaW5lIHgxPSIxMTcwIiB5MT0iNjkwIiB4Mj0iMTE3MCIgeTI9IjYwMCIgc3Ryb2tlPSIjQzAzOTJCIiBzdHJva2Utd2lkdGg9IjEuNiIgc3Ryb2tlLWRhc2hhcnJheT0iNiA0IiBtYXJrZXItZW5kPSJ1cmwoI2FDMDM5MkIpIi8+Cjx0ZXh0IHg9IjExNjIiIHk9IjY2MiIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0iZW5kIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPkZBTDogZmV0Y2g8L3RleHQ+Cjx0ZXh0IHg9IjExNjIiIHk9IjY3NiIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0iZW5kIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPm1pc3NpbmcgbG9nczwvdGV4dD4KPHJlY3QgeD0iNjUwIiB5PSI2MjAiIHdpZHRoPSIyMjAiIGhlaWdodD0iNjAiIHJ4PSIxMCIgZmlsbD0iI0Y1RjdGQSIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI2NjIiIHk9IjY0MiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzdCODc5NCIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5vcmFjbGUtaW5pdCAob25lLW9mZik8L3RleHQ+Cjx0ZXh0IHg9IjY2MiIgeT0iNjYyIiBmb250LXNpemU9IjEyIiBmaWxsPSIjMUYyOTMzIiB0ZXh0LWFuY2hvcj0ic3RhcnQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+Y2hvd24gb3Jhc2hhcmVkIOKGkiBleGl0PC90ZXh0Pgo8cmVjdCB4PSI2NTAiIHk9IjcwNSIgd2lkdGg9IjIyMCIgaGVpZ2h0PSIxMTAiIHJ4PSIxMCIgZmlsbD0iI0Y1RjdGQSIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuNiIvPgo8dGV4dCB4PSI2NjIiIHk9IjcyNyIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzdCODc5NCIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IlNlZ29lIFVJLCBIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIj5vcmFzaGFyZWQgdm9sdW1lPC90ZXh0Pgo8dGV4dCB4PSI2NjIiIHk9Ijc0NyIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iQ29uc29sYXMsIERlamFWdSBTYW5zIE1vbm8sIG1vbm9zcGFjZSI+b3JhcHdPUkNMQ0RCPC90ZXh0Pgo8dGV4dCB4PSI2NjIiIHk9Ijc2NCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iQ29uc29sYXMsIERlamFWdSBTYW5zIE1vbm8sIG1vbm9zcGFjZSI+cHJpbWFyeV9zZXJ2aWNlPC90ZXh0Pgo8dGV4dCB4PSI2NjIiIHk9Ijc4MSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzFGMjkzMyIgdGV4dC1hbmNob3I9InN0YXJ0IiBmb250LWZhbWlseT0iQ29uc29sYXMsIERlamFWdSBTYW5zIE1vbm8sIG1vbm9zcGFjZSI+cHJpbWFyeV9yZWFkeSAgKGZsYWcpPC90ZXh0Pgo8bGluZSB4MT0iODcwIiB5MT0iNzI1IiB4Mj0iOTU1IiB5Mj0iNTg1IiBzdHJva2U9IiM3Qjg3OTQiIHN0cm9rZS13aWR0aD0iMS4zIiBzdHJva2UtZGFzaGFycmF5PSI2IDQiIG1hcmtlci1lbmQ9InVybCgjYTdCODc5NCkiLz4KPGxpbmUgeDE9Ijg3MCIgeTE9Ijc3NSIgeDI9Ijk1NSIgeTI9Ijc2MCIgc3Ryb2tlPSIjN0I4Nzk0IiBzdHJva2Utd2lkdGg9IjEuMyIgc3Ryb2tlLWRhc2hhcnJheT0iNiA0IiBtYXJrZXItZW5kPSJ1cmwoI2E3Qjg3OTQpIi8+Cjx0ZXh0IHg9IjkzMCIgeT0iNjgwIiBmb250LXNpemU9IjEwLjUiIGZpbGw9IiM1MjYwNkQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSwgSGVsdmV0aWNhLCBBcmlhbCwgc2Fucy1zZXJpZiI+d3JpdGVzPC90ZXh0Pgo8dGV4dCB4PSI5MDUiIHk9Ijc4NSIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNTI2MDZEIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iU2Vnb2UgVUksIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWYiPnJlYWRzPC90ZXh0Pjwvc3ZnPgo=" /></p>
+<p><em>(Vector version: <code>docs/architecture.svg</code>. Step-by-step workflows: <code>ARCHITECTURE.html</code>.)</em></p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it is</th>
+<th>Where it runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Python app</strong></td>
+<td><code>app/agent.py</code> (terminal chat) and <code>app/app.py</code> (web UI, Streamlit). A LangChain agent that talks to one database at a time.</td>
+<td>On the VM, in a uv virtual environment (<code>.venv</code>)</td>
+</tr>
+<tr>
+<td><strong>Model</strong></td>
+<td>Understands the question, picks a tool, writes SQL (<code>gpt-5-mini</code> by default; switchable)</td>
+<td>OpenAI, or your OpenAI-compatible gateway (HTTPS)</td>
+</tr>
+<tr>
+<td><strong>MCP Toolbox</strong></td>
+<td>Google's open-source server that exposes database tools (<code>execute_sql</code>, <code>list_tables</code>, <code>dg_health_check</code>, …) to agents over MCP</td>
+<td>4 Docker containers</td>
+</tr>
+<tr>
+<td><strong>Demo databases</strong></td>
+<td>PostgreSQL 16, MySQL 8.4, MariaDB 11.4, each with sample data</td>
+<td>3 Docker containers</td>
+</tr>
+<tr>
+<td><strong>Oracle lab</strong></td>
+<td>Oracle 19c primary <code>ORCLCDB</code> (PDB <code>ORCLPDB1</code>) + physical standby <code>ORCLCDB_STBY</code>, redo shipped ASYNC, real-time apply</td>
+<td>2 Docker containers, your image <code>oracle/database:19.3.0-ee-ext</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Key in the agent</th>
+<th>Database</th>
+<th>Data</th>
+<th>DB port</th>
+<th>Toolbox</th>
+<th>Tools</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>postgres</code></td>
+<td>PostgreSQL 16</td>
+<td>online shop: customers, products, orders, order_items</td>
+<td>5432</td>
+<td>5000</td>
+<td>32 (29 built-in + 3 custom)</td>
+</tr>
+<tr>
+<td><code>mysql</code></td>
+<td>MySQL 8.4</td>
+<td>inventory: suppliers, warehouses, purchase_orders</td>
+<td>3306</td>
+<td>5001</td>
+<td>9</td>
+</tr>
+<tr>
+<td><code>mariadb</code></td>
+<td>MariaDB 11.4</td>
+<td>support: support_agents, tickets</td>
+<td>3307</td>
+<td>5002</td>
+<td>9</td>
+</tr>
+<tr>
+<td><code>oracle_prod</code></td>
+<td>Oracle 19c primary (+ standby)</td>
+<td>Data Guard, performance, space, FRA, RMAN</td>
+<td>1531 (standby 1532)</td>
+<td>5004</td>
+<td>30</td>
+</tr>
+</tbody>
+</table>
+<p>All ports are bound to <code>127.0.0.1</code>: nothing is reachable from outside the VM except SSH.</p>
+<hr />
+<h2 id="2-what-you-need">2. What you need</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Machine</td>
+<td>Linux x86-64 (Intel/AMD, <strong>not</strong> Arm / Apple Silicon), Ubuntu 22.04/24.04 recommended</td>
+</tr>
+<tr>
+<td>Size</td>
+<td><strong>16 GB RAM</strong>, 4 vCPU, <strong>100 GB disk</strong> (the Oracle pair needs most of it)</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Outbound internet (Docker images, Python packages, the model). Inbound: SSH only</td>
+</tr>
+<tr>
+<td>Oracle image</td>
+<td><code>oracle/database:19.3.0-ee-ext</code>, the image you already use (section 5 copies it over)</td>
+</tr>
+<tr>
+<td>Model</td>
+<td>An <strong>OpenAI API key</strong>, or your gateway's URL + key</td>
+</tr>
+<tr>
+<td>On your laptop</td>
+<td><code>ssh</code> and <code>scp</code> (built into macOS, Linux and Windows 10+)</td>
+</tr>
+</tbody>
+</table>
+<p>Approximate memory use with everything running:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>RAM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Oracle primary</td>
+<td>~2.5 GB (SGA 1.5 GB + PGA 0.5 GB + processes)</td>
+</tr>
+<tr>
+<td>Oracle standby</td>
+<td>~2.5 GB</td>
+</tr>
+<tr>
+<td>MySQL 8.4</td>
+<td>~400 MB</td>
+</tr>
+<tr>
+<td>MariaDB + PostgreSQL</td>
+<td>~250 MB</td>
+</tr>
+<tr>
+<td>4 Toolbox servers</td>
+<td>~200 MB</td>
+</tr>
+<tr>
+<td>Agent / web UI</td>
+<td>~300 MB</td>
+</tr>
+<tr>
+<td>Linux + Docker + page cache headroom</td>
+<td>2-4 GB</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Only 8 GB?</strong> Set <code>ORACLE_SGA_MB=1024</code> and <code>ORACLE_PGA_MB=256</code> in <code>.env</code> <em>before the
+first start</em>, add 4 GB swap, and expect it to be slow. Without the Oracle lab (section 12,
+<em>Run without Oracle</em>) the rest runs in 2 GB.</p>
+<hr />
+<h2 id="3-create-the-vm">3. Create the VM</h2>
+<p><strong>Option A: home lab, Oracle VirtualBox (recommended for you).</strong></p>
+<ol>
+<li>Download the <strong>Ubuntu Server 24.04 LTS</strong> ISO.</li>
+<li>VirtualBox → <strong>New</strong>: name <code>db-agent</code>, type Linux / Ubuntu (64-bit), attach the ISO,
+   tick <em>Skip Unattended Installation</em> if you want to choose the user yourself.</li>
+<li><strong>Hardware:</strong> 16384 MB memory, 4 CPUs. <strong>Disk:</strong> 100 GB, VDI, dynamically allocated
+   (it only uses what it needs).</li>
+<li><strong>Network</strong> (Settings → Network → Adapter 1), pick one:
+   - <strong>Bridged Adapter</strong>: the VM gets its own IP on your home network. Simplest; SSH to
+     that IP.
+   - <strong>NAT + port forward</strong>: Advanced → Port Forwarding → add <code>ssh</code>, TCP, host port <code>2222</code>,
+     guest port <code>22</code>. Then <code>ssh -p 2222 &lt;user&gt;@127.0.0.1</code> from the host.</li>
+<li>Install Ubuntu: accept the defaults, <strong>tick "Install OpenSSH server"</strong>, skip the snaps.</li>
+<li>After the reboot, log in on the console once and note the IP: <code>ip -br a</code>.</li>
+</ol>
+<p>From now on work over SSH from your laptop: <code>ssh &lt;user&gt;@&lt;vm-ip&gt;</code>.</p>
+<blockquote>
+<p>VirtualBox tips: give the VM fixed RAM (no ballooning), keep <em>Nested VT-x</em> off, and set
+Settings → System → Processor → <em>Enable PAE/NX</em> on. If the host has less than 24 GB,
+close other VMs while Oracle builds.</p>
+</blockquote>
+<p><strong>Option B: Azure, automatic.</strong> In the Azure portal open <strong>Cloud Shell</strong> (<code>&gt;_</code>, <strong>Bash</strong>),
+upload <code>infra/azure/create-db-agent-vm.sh</code> and run <code>bash create-db-agent-vm.sh</code>. It picks
+your resource group, an available size, asks for a username/password and your laptop's IP
+(for SSH), creates Ubuntu 24.04 and <strong>installs Docker, Compose, unzip, uv, fail2ban and
+swap</strong>, then prints the <code>ssh</code>/<code>scp</code> commands. For the Oracle lab pick a 16 GB size (e.g.
+<code>Standard_D4s_v5</code>) and a 128 GB disk. If you use this option, <strong>skip step 4</strong>.</p>
+<p><strong>Option C: any other VM.</strong> Ubuntu, sized as in section 2, only SSH (22) open; then step 4.</p>
+<hr />
+<h2 id="4-install-docker-uv-and-unzip">4. Install Docker, uv and unzip</h2>
+<p><em>(Skip if you used the Azure script.)</em> On the VM:</p>
+<pre><code class="language-bash">sudo apt-get update &amp;&amp; sudo apt-get install -y ca-certificates curl unzip git tmux
+curl -fsSL https://get.docker.com | sudo sh            # Docker Engine + Compose plugin
+sudo usermod -aG docker $USER &amp;&amp; newgrp docker          # use docker without sudo
+curl -LsSf https://astral.sh/uv/install.sh | sh         # uv
+source $HOME/.local/bin/env
+</code></pre>
+<p>Recommended, 4 GB of swap (protects against out-of-memory kills during the Oracle build):</p>
+<pre><code class="language-bash">sudo fallocate -l 4G /swapfile &amp;&amp; sudo chmod 600 /swapfile &amp;&amp; sudo mkswap /swapfile &amp;&amp; sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+</code></pre>
+<p><strong>Check:</strong></p>
+<pre><code class="language-bash">docker --version &amp;&amp; docker compose version &amp;&amp; uv --version &amp;&amp; unzip -v | head -1
+docker ps        # an empty table - NOT &quot;permission denied&quot;
+free -h          # ~15 GB total
+df -h /          # 80+ GB available
+</code></pre>
+<p>If <code>docker ps</code> says <em>permission denied</em>, log out and back in once.
+If <code>uv</code> is <em>not found</em>, run <code>source $HOME/.local/bin/env</code>.
+Docker Compose must be <strong>v2.20 or newer</strong> (<code>docker compose version</code>); the get.docker.com
+script installs a current one.</p>
+<hr />
+<h2 id="5-copy-the-project-and-the-oracle-image">5. Copy the project and the Oracle image</h2>
+<p><strong>The project.</strong> From your <strong>laptop</strong> (in the folder with the zip):</p>
+<pre><code class="language-bash">scp db-agent-docker.zip &lt;user&gt;@&lt;vm-ip&gt;:~
+</code></pre>
+<p>On the <strong>VM</strong>:</p>
+<pre><code class="language-bash">cd ~ &amp;&amp; unzip db-agent-docker.zip &amp;&amp; cd db-agent
+ls
+</code></pre>
+<p><strong>You should see:</strong> <code>app  ARCHITECTURE.html  config  db  docker-compose.yml  docs  infra  ORACLE-LAB.md  …  pyproject.toml  README.md  scripts  SETUP.md</code></p>
+<p><strong>The Oracle image.</strong> It isn't on Docker Hub, so copy it from the machine that has it
+(e.g. your dev host). It's about 8 GB unpacked, ~3 GB compressed:</p>
+<pre><code class="language-bash"># on the machine that HAS the image
+docker save oracle/database:19.3.0-ee-ext | gzip -1 &gt; oracle-19.3.0-ee-ext.tar.gz
+scp oracle-19.3.0-ee-ext.tar.gz &lt;user&gt;@&lt;vm-ip&gt;:~
+
+# on the VM
+gunzip -c ~/oracle-19.3.0-ee-ext.tar.gz | docker load
+docker images oracle/database          # 19.3.0-ee-ext   ...   8.31GB
+rm ~/oracle-19.3.0-ee-ext.tar.gz       # optional, frees 3 GB
+</code></pre>
+<p>(If the two machines can't see each other, copy the <code>.tar.gz</code> through your laptop, or
+build the image again from Oracle's <code>docker-images</code> GitHub repo with the 19.3 install zip.
+Use it under your Oracle licence; this lab is for testing only.)</p>
+<blockquote>
+<p><strong>Shortcut: let Claude Code do sections 6-9.</strong> Once Docker is installed (section 4), the
+Oracle image is loaded and the project is unzipped, start Claude Code in <code>~/db-agent</code> and
+say: <em>"Deploy and verify this project following CLAUDE.md."</em> It reads <code>CLAUDE.md</code>, does
+sections 6-9 (fixing problems as it goes), writes everything it did to <code>DEPLOY-LOG.md</code>,
+and ends with the <code>check.py</code> output and <strong>READY TO GO</strong>. It never deletes data, uses
+<code>sudo</code> or shows passwords without asking. Afterwards put your API key in <code>.env</code> yourself
+if you haven't yet.</p>
+</blockquote>
+<hr />
+<h2 id="6-create-the-settings-file-env">6. Create the settings file (.env)</h2>
+<pre><code class="language-bash">bash scripts/make-env.sh     # creates .env with strong random passwords for every database
+nano .env                    # replace sk-REPLACE_ME with your API key
+                             # save: Ctrl+O, Enter   exit: Ctrl+X
+</code></pre>
+<p><strong>Using OpenAI in the lab?</strong> <code>oracle_prod</code> is marked <em>in-house models only</em> (so a real
+production database never sends data to an outside model). For this lab, allow it by
+uncommenting this line in <code>.env</code>:</p>
+<pre><code class="language-bash">ALLOW_EXTERNAL_MODELS_FOR=oracle_prod     # lab only - never with a real production database
+</code></pre>
+<p>With an in-house gateway instead, set <code>OPENAI_BASE_URL=https://&lt;host&gt;/api</code>, its key and
+a model id from its <code>/models</code> list, and leave that line commented.</p>
+<p><strong>Check:</strong></p>
+<pre><code class="language-bash">grep -c REPLACE_ME .env                          # 0
+grep -E &quot;PASSWORD|_USER&quot; .env | sed 's/=.*/=&lt;set&gt;/'
+docker compose config --quiet &amp;&amp; echo &quot;compose OK&quot;
+docker compose config --services | sort | tr '\n' ' '
+</code></pre>
+<p>You should see 2 <code>_USER…</code> lines and 8 <code>PASSWORD</code> lines, all <code>&lt;set&gt;</code>, then <code>compose OK</code>,
+then 10 services: <code>db mariadb mysql oracle-init oracle-primary oracle-standby toolbox toolbox-mariadb toolbox-mysql toolbox-oracle-prod</code>.</p>
+<p>What's in <code>.env</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OPENAI_BASE_URL</code>, <code>OPENAI_API_KEY</code>, <code>OPENAI_MODEL</code></td>
+<td>where the model runs (OpenAI, or any OpenAI-compatible gateway such as Open WebUI at <code>https://…/api</code>), its key, and the default model</td>
+</tr>
+<tr>
+<td><code>SSL_CERT_FILE</code></td>
+<td>optional: corporate CA bundle (PEM) for HTTPS to the model gateway</td>
+</tr>
+<tr>
+<td><code>EXTERNAL_MODEL_PATTERNS</code>, <code>LLM_PROVIDER_EXTERNAL</code>, <code>ALLOW_EXTERNAL_MODELS_FOR</code></td>
+<td>which models count as external (data leaves your network); see section 11a</td>
+</tr>
+<tr>
+<td><code>AGENT_MODE</code></td>
+<td><code>single</code> (default): you choose one database at a time. <code>auto</code>: the agent picks per question</td>
+</tr>
+<tr>
+<td><code>DEFAULT_DATABASE</code></td>
+<td>optional, e.g. <code>oracle_prod</code> to skip the start-up menu</td>
+</tr>
+<tr>
+<td><code>POSTGRES_USER</code> / <code>POSTGRES_PASSWORD</code>, <code>MYSQL_ROOT_PASSWORD</code>, <code>MARIADB_ROOT_PASSWORD</code></td>
+<td>demo database admins (setup only)</td>
+</tr>
+<tr>
+<td><code>DB_READER_PASSWORD</code>, <code>MYSQL_READER_PASSWORD</code>, <code>MARIADB_READER_PASSWORD</code></td>
+<td>the read-only <code>agent_reader</code> login on each demo database</td>
+</tr>
+<tr>
+<td><code>ORACLE_IMAGE</code></td>
+<td>the Oracle image (<code>oracle/database:19.3.0-ee-ext</code>)</td>
+</tr>
+<tr>
+<td><code>ORACLE_SYS_PASSWORD</code></td>
+<td>SYS on the lab primary <strong>and</strong> standby (the standby copies the primary's password file)</td>
+</tr>
+<tr>
+<td><code>ORACLE_SGA_MB</code>, <code>ORACLE_PGA_MB</code></td>
+<td>memory per Oracle instance (1536 / 512 by default)</td>
+</tr>
+<tr>
+<td><code>ORACLE_PRIMARY_PORT</code>, <code>ORACLE_STANDBY_PORT</code></td>
+<td>localhost ports for SQL*Plus / SQL Developer (1531 / 1532)</td>
+</tr>
+<tr>
+<td><code>ORACLE_PROD_CONNECTION_STRING</code>, <code>_USERNAME</code>, <code>_PASSWORD</code></td>
+<td>how <code>oracle_prod</code>'s Toolbox logs in. Default: the lab primary as <code>C##AGENT_READER</code></td>
+</tr>
+<tr>
+<td><code>COMPOSE_PROFILES</code></td>
+<td>optional parts to start: <code>oracle-lab</code> (the two Oracle databases), <code>oracle-prod</code> (its Toolbox)</td>
+</tr>
+<tr>
+<td><code>TOOLBOX_VERSION</code></td>
+<td>MCP Toolbox image tag (<code>latest</code>; pin a version once it works)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Passwords are read by the databases <strong>only on their first start</strong>. Decide them now;
+changing them later needs a reset (section 12).
+Use letters and digits only (the generator already does).</p>
+</blockquote>
+<hr />
+<h2 id="7-install-the-python-side-with-uv">7. Install the Python side with uv</h2>
+<pre><code class="language-bash">uv sync
+</code></pre>
+<p>This installs Python 3.12 (if needed) and the pinned libraries (<code>langchain</code>,
+<code>langchain-openai</code>, <code>toolbox-langchain</code>, <code>streamlit</code>) into <code>.venv</code>, and writes <code>uv.lock</code>.</p>
+<p><strong>You should see</strong> a list of <code>+ package==version</code> lines and no errors.</p>
+<hr />
+<h2 id="8-start-everything">8. Start everything</h2>
+<pre><code class="language-bash">docker compose up -d
+</code></pre>
+<p>The first run downloads about 2 GB of images (the Oracle image is already loaded) and
+then builds the databases. What happens, and when:</p>
+<table>
+<thead>
+<tr>
+<th>Time</th>
+<th>What</th>
+<th>How you know</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>~1 min</td>
+<td>Postgres, MySQL, MariaDB create their sample data and <code>agent_reader</code>; their Toolboxes start</td>
+<td><code>docker compose ps</code> → <code>(healthy)</code></td>
+</tr>
+<tr>
+<td>~1 min</td>
+<td><code>oracle-init</code> prepares the shared volume and exits</td>
+<td><code>Exited (0)</code> (normal)</td>
+</tr>
+<tr>
+<td>15-40 min</td>
+<td><code>oracle-primary</code> creates the CDB, then sets up Data Guard and <code>C##AGENT_READER</code></td>
+<td>log: <code>DATABASE IS READY TO USE!</code></td>
+</tr>
+<tr>
+<td>meanwhile</td>
+<td><code>toolbox-oracle-prod</code> restarts every few seconds (the primary isn't open yet)</td>
+<td>normal until the primary is ready</td>
+</tr>
+<tr>
+<td>+10-30 min</td>
+<td><code>oracle-standby</code> copies the primary with RMAN, then starts redo apply</td>
+<td>log: <code>STANDBY IS READY TO USE!</code></td>
+</tr>
+</tbody>
+</table>
+<p>Follow along (Ctrl+C stops following; the containers keep running):</p>
+<pre><code class="language-bash">docker compose logs -f oracle-primary      # wait for: DATABASE IS READY TO USE!
+docker compose logs -f oracle-standby      # wait for: STANDBY IS READY TO USE!
+docker compose ps
+</code></pre>
+<p><strong>Check the setup scripts ran cleanly:</strong></p>
+<pre><code class="language-bash">docker compose logs db      | grep -E &quot;running /docker-entrypoint|ERROR|init process complete&quot;
+docker compose logs mysql   | grep -iE &quot;02-readonly|error&quot; | tail -3
+docker compose logs mariadb | grep -iE &quot;02-readonly|error&quot; | tail -3
+docker compose logs oracle-primary | grep -E &quot;db-agent|ORA-&quot; | tail -15
+docker compose logs oracle-standby | grep -E &quot;standby:|ORA-|Finished Duplicate&quot; | tail -15
+</code></pre>
+<p>For the primary you want <code>db-agent: Data Guard primary configured</code>. For the standby:
+<code>Finished Duplicate Db</code> and <code>physical standby ORCLCDB_STBY created</code>. Details and fixes:
+<code>ORACLE-LAB.md</code>.</p>
+<hr />
+<h2 id="9-check-everything-is-connected">9. Check everything is connected</h2>
+<pre><code class="language-bash">uv run --env-file .env python scripts/check.py
+</code></pre>
+<p><strong>You should see:</strong></p>
+<pre><code>OK    postgres     32 tools  http://127.0.0.1:5000
+OK    mysql         9 tools  http://127.0.0.1:5001
+OK    mariadb       9 tools  http://127.0.0.1:5002
+OK    oracle_prod  30 tools  http://127.0.0.1:5004
+
+4/4 databases reachable.
+</code></pre>
+<p>This calls only the Toolbox servers, not the model. A <code>FAIL</code> line names the container to
+look at (section 13). <code>oracle_prod</code> fails until the primary is ready; that's expected.</p>
+<p><strong>Data Guard by hand</strong> (should say <code>PHYSICAL STANDBY</code>, an <code>MRP0</code> line and lags near 0):</p>
+<pre><code class="language-bash">docker exec -i oracle-standby bash -c &quot;sqlplus -s / as sysdba&quot; &lt;&lt;'EOF'
+select database_role, open_mode from v$database;
+select process, status, sequence# from v$managed_standby where process like 'MRP%';
+select name, value from v$dataguard_stats where name in ('transport lag','apply lag');
+EOF
+</code></pre>
+<hr />
+<h2 id="10-chat-in-the-terminal">10. Chat in the terminal</h2>
+<pre><code class="language-bash">uv run --env-file .env python app/agent.py
+</code></pre>
+<p>Pick a database from the menu (number or name), then ask. Try these:</p>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Ask</th>
+<th>Correct answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>postgres</td>
+<td><code>Top 3 customers by total spend</code></td>
+<td>Ava Patel 735.48 · Sofia Rossi 707.50 · Emma Dubois 409.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td><code>Which suppliers have open purchase orders, and for how much?</code></td>
+<td>Shenzhen Parts 24,300 · Bavaria Industrial 11,200 · Acme 7,600.75 · Nordic Supply 5,100</td>
+</tr>
+<tr>
+<td>mariadb</td>
+<td><code>How many urgent or high priority tickets are unresolved?</code></td>
+<td>2 (both high)</td>
+</tr>
+<tr>
+<td>oracle_prod</td>
+<td><code>Is Data Guard healthy?</code></td>
+<td>HEALTHY: dest 2 <code>ORCLCDB_STBY</code> VALID, real-time apply, no gap, lag about 0</td>
+</tr>
+<tr>
+<td>oracle_prod</td>
+<td><code>What are the top wait events right now?</code></td>
+<td>a short list (an idle lab is mostly idle/background waits)</td>
+</tr>
+<tr>
+<td>oracle_prod</td>
+<td><code>How full are the tablespaces and the FRA?</code></td>
+<td>per-tablespace % used; FRA usage (or "no FRA configured")</td>
+</tr>
+<tr>
+<td>any</td>
+<td><code>delete all orders</code></td>
+<td>one-sentence refusal (read-only)</td>
+</tr>
+</tbody>
+</table>
+<p>To see the agent spot a problem, break Data Guard on purpose (<code>ORACLE-LAB.md</code>, <em>Break it on
+purpose</em>), then ask again.</p>
+<p>Every answer starts with the database name, e.g. <strong>[Oracle PROD (primary + Data Guard)]</strong>,
+and shows the tools it used:</p>
+<pre><code>[tool] [oracle_prod] dg_health_check
+[tool] [oracle_prod] dg_apply_progress
+</code></pre>
+<p><strong>Commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>use mysql</code></td>
+<td>switch database (starts a fresh conversation)</td>
+</tr>
+<tr>
+<td><code>@oracle_prod &lt;question&gt;</code></td>
+<td>ask another database once, without switching</td>
+</tr>
+<tr>
+<td><code>dbs</code></td>
+<td>list databases and their status</td>
+</tr>
+<tr>
+<td><code>tools</code></td>
+<td>list the current database's tools (read directly from Toolbox)</td>
+</tr>
+<tr>
+<td><code>models</code></td>
+<td>list every model the provider offers (numbered; marks the current one, external ones, and any blocked for this database)</td>
+</tr>
+<tr>
+<td><code>model &lt;number or id&gt;</code></td>
+<td>switch model for the following questions, e.g. <code>model 2</code> or <code>model gpt-oss-120b</code></td>
+</tr>
+<tr>
+<td><code>quit</code> / <code>exit</code> / Ctrl+C</td>
+<td>leave</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="11-use-the-web-ui">11. Use the web UI</h2>
+<p>On the <strong>VM</strong> (inside <code>tmux</code>, so it keeps running after you log out):</p>
+<pre><code class="language-bash">tmux new -s agent
+uv run --env-file .env streamlit run app/app.py
+# detach: Ctrl+B then D      re-attach later: tmux attach -t agent
+</code></pre>
+<p>On your <strong>laptop</strong>, open an SSH tunnel and leave that window open:</p>
+<pre><code class="language-bash">ssh -L 8501:localhost:8501 &lt;user&gt;@&lt;vm-ip&gt;
+# VirtualBox NAT with port forward:  ssh -p 2222 -L 8501:localhost:8501 &lt;user&gt;@127.0.0.1
+</code></pre>
+<p>Then browse to <strong>http://localhost:8501</strong>. Pick the database in the sidebar; switching clears the chat.
+Pick the <strong>model</strong> in the sidebar too: the list comes from the provider's <code>/models</code> (refreshed every
+5 minutes); external models are marked <code>· external</code>. Each browser session has its own model choice.
+Expand <strong>Tools used</strong> under an answer to see the tool calls and SQL. The ⋮ menu keeps the
+light/dark theme switch.</p>
+<blockquote>
+<p>Do <strong>not</strong> open port 8501 in the firewall: the page has no login, and anyone who finds
+it could query your databases and spend your model credits. Use the tunnel.</p>
+</blockquote>
+<h3 id="11a-choosing-the-model-and-keeping-prod-data-in-house">11a. Choosing the model, and keeping prod data in-house</h3>
+<p>The agent works with whatever OpenAI-compatible endpoint <code>OPENAI_BASE_URL</code> points at, and you
+can switch models at any time (<code>models</code> / <code>model &lt;id&gt;</code> in the terminal, the sidebar in the web UI).</p>
+<p>A model is treated as <strong>external</strong> (questions and results leave your network) when:</p>
+<ul>
+<li>the endpoint is OpenAI (<code>OPENAI_BASE_URL</code> empty or <code>*.openai.com</code>), unless <code>LLM_PROVIDER_EXTERNAL=false</code>, or</li>
+<li>its id matches <code>EXTERNAL_MODEL_PATTERNS</code> (default <code>internet/*,zcloud/*</code>, for gateway connections that
+  forward to outside providers). Set <code>LLM_PROVIDER_EXTERNAL=true</code> to mark a whole gateway external.</li>
+</ul>
+<p>Databases marked <code>internal_models_only = true</code> in <code>app/databases.toml</code> (<code>oracle_prod</code>) <strong>refuse
+external models</strong>: the terminal says "Blocked: …" and the web UI disables the question box until you
+pick an internal model. For the home lab with OpenAI, allow it explicitly:
+<code>ALLOW_EXTERNAL_MODELS_FOR=oracle_prod</code> (never on a real production database).</p>
+<hr />
+<h2 id="12-day-to-day-operations">12. Day-to-day operations</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command (in <code>~/db-agent</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td><code>docker compose ps</code></td>
+</tr>
+<tr>
+<td>Logs of one service</td>
+<td><code>docker compose logs &lt;service&gt; | tail -30</code> (<code>db</code>, <code>mysql</code>, <code>mariadb</code>, <code>oracle-primary</code>, <code>oracle-standby</code>, <code>toolbox</code>, <code>toolbox-mysql</code>, <code>toolbox-mariadb</code>, <code>toolbox-oracle-prod</code>)</td>
+</tr>
+<tr>
+<td>Memory / CPU</td>
+<td><code>free -h</code> · <code>docker stats --no-stream</code></td>
+</tr>
+<tr>
+<td>Stop everything (keep data)</td>
+<td><code>docker compose down</code> (Oracle does a clean <code>SHUTDOWN IMMEDIATE</code>)</td>
+</tr>
+<tr>
+<td>Start again</td>
+<td><code>docker compose up -d</code> (Oracle opens in ~1 minute after the first build)</td>
+</tr>
+<tr>
+<td>SQL*Plus on the primary</td>
+<td><code>docker compose exec oracle-primary sqlplus / as sysdba</code></td>
+</tr>
+<tr>
+<td>SQL*Plus on the standby</td>
+<td><code>docker compose exec oracle-standby sqlplus / as sysdba</code></td>
+</tr>
+<tr>
+<td>From SQL Developer on the VM</td>
+<td><code>localhost:1531/ORCLCDB</code> (primary; <code>ORCLCDB.localdomain</code> on images that set <code>db_domain</code>, check <code>lsnrctl status</code>), <code>localhost:1532/ORCLCDB_STBY</code> as SYSDBA (standby)</td>
+</tr>
+<tr>
+<td>Restart one Toolbox after editing its config</td>
+<td><code>docker compose restart toolbox</code> (or <code>toolbox-oracle-prod</code>, …)</td>
+</tr>
+<tr>
+<td>Reset ONE demo database to the sample data</td>
+<td><code>docker compose rm -sf mysql toolbox-mysql &amp;&amp; docker volume rm db-agent_mysqldata &amp;&amp; docker compose up -d</code> (same pattern for <code>db</code>/<code>pgdata</code>, <code>mariadb</code>/<code>mariadbdata</code>)</td>
+</tr>
+<tr>
+<td>Rebuild the Oracle lab from scratch</td>
+<td>see <code>ORACLE-LAB.md</code>, <em>Start over</em></td>
+</tr>
+<tr>
+<td>Run without Oracle (saves ~6 GB RAM)</td>
+<td><code>COMPOSE_PROFILES=</code> (empty) and <code>ORACLE_PROD_CONNECTION_STRING=</code> (empty) in <code>.env</code>, then <code>docker compose down &amp;&amp; docker compose up -d</code></td>
+</tr>
+<tr>
+<td>Pause only Oracle</td>
+<td><code>docker compose stop toolbox-oracle-prod oracle-standby oracle-primary</code> (start: <code>docker compose up -d</code>)</td>
+</tr>
+<tr>
+<td>Reset EVERYTHING (deletes all data, incl. Oracle)</td>
+<td><code>docker compose down -v &amp;&amp; docker compose up -d</code></td>
+</tr>
+<tr>
+<td>Update Python libraries</td>
+<td><code>uv lock --upgrade &amp;&amp; uv sync</code></td>
+</tr>
+<tr>
+<td>Update images</td>
+<td><code>docker compose pull &amp;&amp; docker compose up -d</code> (the Oracle image is local; <code>pull</code> skips it)</td>
+</tr>
+<tr>
+<td>Only some databases in the agent</td>
+<td><code>AGENT_DATABASES=postgres,oracle_prod</code> in <code>.env</code></td>
+</tr>
+<tr>
+<td>Save your work</td>
+<td><code>git init -q; git add -A &amp;&amp; git commit -m "working"</code> (<code>.env</code> is git-ignored)</td>
+</tr>
+<tr>
+<td>Shut the VM down</td>
+<td><code>docker compose down &amp;&amp; sudo poweroff</code> (VirtualBox: then <em>Start</em> it again later)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="13-troubleshooting">13. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docker ps</code>: permission denied</td>
+<td>your user isn't in the <code>docker</code> group yet</td>
+<td>log out and back in (or <code>newgrp docker</code>)</td>
+</tr>
+<tr>
+<td><code>uv: command not found</code></td>
+<td>uv's folder not on PATH yet</td>
+<td><code>source $HOME/.local/bin/env</code></td>
+</tr>
+<tr>
+<td><code>required variable … is missing a value</code></td>
+<td><code>.env</code> missing or incomplete</td>
+<td><code>bash scripts/make-env.sh</code> (or add the line from <code>.env.example</code>)</td>
+</tr>
+<tr>
+<td><code>pull access denied for oracle/database</code></td>
+<td>the Oracle image isn't loaded on this machine</td>
+<td>section 5, <em>The Oracle image</em>; <code>docker images oracle/database</code></td>
+</tr>
+<tr>
+<td><code>depends_on … required</code> / unknown key errors</td>
+<td>Docker Compose older than v2.20</td>
+<td>update Docker (section 4)</td>
+</tr>
+<tr>
+<td>Oracle primary stops with <code>ORA-</code> during creation</td>
+<td>not enough memory or disk</td>
+<td><code>free -h</code>, <code>df -h</code>; lower <code>ORACLE_SGA_MB</code>, then <em>Start over</em> (<code>ORACLE-LAB.md</code>)</td>
+</tr>
+<tr>
+<td>Standby log stuck at <em>waiting for …/primary_ready</em></td>
+<td>the primary is still building, or its setup script failed</td>
+<td><code>docker compose logs oracle-primary | grep db-agent</code></td>
+</tr>
+<tr>
+<td>Standby: <code>ERROR: RMAN duplicate failed</code></td>
+<td>see <code>duplicate.log</code></td>
+<td><code>ORACLE-LAB.md</code>, <em>Troubleshooting</em></td>
+</tr>
+<tr>
+<td><code>toolbox-oracle-prod</code> keeps restarting</td>
+<td>normal until the primary is open; after that the login failed</td>
+<td><code>docker compose logs toolbox-oracle-prod | tail</code>; check <code>ORACLE_PROD_PASSWORD</code></td>
+</tr>
+<tr>
+<td>Random containers die, VM freezes</td>
+<td>out of memory</td>
+<td>16 GB RAM, add swap (section 4), lower <code>ORACLE_SGA_MB</code>, or run without Oracle</td>
+</tr>
+<tr>
+<td><code>port is already allocated</code></td>
+<td>another stack (or your old Oracle pair) uses that port</td>
+<td><code>docker compose down</code> in the other folder, or change <code>ORACLE_PRIMARY_PORT</code> / <code>ORACLE_STANDBY_PORT</code></td>
+</tr>
+<tr>
+<td><code>check.py</code>: FAIL for one database</td>
+<td>its Toolbox isn't up, or its login failed</td>
+<td><code>docker compose ps</code>, then <code>docker compose logs toolbox-&lt;db&gt; | tail -20</code> (Postgres: <code>toolbox</code>)</td>
+</tr>
+<tr>
+<td>Toolbox log: <code>password authentication failed</code> / <code>ORA-01017</code></td>
+<td>passwords changed in <code>.env</code> after the database was created</td>
+<td>reset that database (section 12)</td>
+</tr>
+<tr>
+<td>A container can't read a setup file (<code>Permission denied</code>)</td>
+<td>files unpacked with private permissions</td>
+<td><code>chmod 644 config/*.yaml db/*/init/*.sql &amp;&amp; chmod 755 db/*/init/*.sh db/oracle-lab/*/*.sh</code>, then reset that database</td>
+</tr>
+<tr>
+<td>Agent: <code>Can't reach … (http://127.0.0.1:500x)</code></td>
+<td>that Toolbox is down</td>
+<td><code>docker compose up -d</code>, then <code>check.py</code></td>
+</tr>
+<tr>
+<td><code>Blocked: … may only be used with an in-house model</code></td>
+<td><code>oracle_prod</code> with an external model</td>
+<td>lab: <code>ALLOW_EXTERNAL_MODELS_FOR=oracle_prod</code> in <code>.env</code>, restart the agent; otherwise pick an internal model</td>
+</tr>
+<tr>
+<td><code>oracle_prod</code> missing from the menu</td>
+<td><code>ORACLE_PROD_CONNECTION_STRING</code> empty, or the agent started without <code>--env-file .env</code></td>
+<td>fill it in; start with <code>uv run --env-file .env …</code></td>
+</tr>
+<tr>
+<td>Model error (401 / model not found)</td>
+<td>wrong key or model name</td>
+<td>fix <code>OPENAI_API_KEY</code> / <code>OPENAI_MODEL</code> in <code>.env</code>, restart the agent; <code>models</code> shows the exact ids</td>
+</tr>
+<tr>
+<td><code>parallel_tool_calls is only allowed when tools are specified</code></td>
+<td>a request without tools (only in hand-made tests)</td>
+<td>the agent always sends tools; attach a tool in your test</td>
+</tr>
+<tr>
+<td>Answer comes from the wrong data</td>
+<td>you're on another database</td>
+<td>look at the <code>You [db | model]</code> prompt; <code>use &lt;db&gt;</code> to switch</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="14-how-it-works">14. How it works</h2>
+<p><strong>One database at a time (default <code>AGENT_MODE=single</code>).</strong>
+You choose the database; there is no automatic routing, so an answer can never come
+from the wrong system. For that database the agent builds a <strong>specialist</strong>: a LangChain
+agent whose tools are exactly the tools that database's Toolbox serves, plus a prompt
+with the database's SQL dialect and notes from <code>app/databases.toml</code>. For <code>oracle_prod</code>
+the notes are a full diagnosis runbook (which Data Guard tools to call in which order,
+what counts as a problem, which fixes may be <em>recommended</em>).</p>
+<p><strong>Per question</strong> (diagram: <code>ARCHITECTURE.html</code>, <em>What happens when you ask</em>):</p>
+<ol>
+<li>Your question (plus the last few exchanges) goes to the model.</li>
+<li>The model picks a tool: a dedicated one (<code>dg_health_check</code>, <code>perf_waits_now</code>,
+   <code>list_query_stats</code>, …), a custom business tool (<code>revenue_by_month</code>, …), or
+   <code>list_tables</code> then <code>execute_sql</code> with SQL it writes.</li>
+<li>The tool call goes to that database's Toolbox over MCP (HTTP).</li>
+<li>Toolbox runs it on the database <strong>with the read-only login</strong> and returns the rows.</li>
+<li>The model writes the answer; the app labels it with the database name.</li>
+</ol>
+<p>Guard rails in the code: at most 4 <code>execute_sql</code> calls per question (stops query loops),
+one tool call at a time, write requests answered with a one-sentence refusal, external
+models blocked on <code>internal_models_only</code> databases.</p>
+<p><strong>Optional automatic routing (<code>AGENT_MODE=auto</code>).</strong> A router agent gets one tool per
+database (<code>ask_postgres</code>, <code>ask_oracle_prod</code>, …), described by the <code>about</code> lines in
+<code>databases.toml</code>, picks the database(s) and combines answers.</p>
+<p><strong>Tools per database.</strong></p>
+<ul>
+<li>Postgres: Toolbox's built-in Postgres set (<code>--prebuilt postgres</code>, 29 tools) plus
+  3 custom tools in <code>config/postgres-custom.yaml</code> (parameterised SQL: the model supplies
+  only values, never SQL).</li>
+<li>MySQL and MariaDB: built-in MySQL set (<code>--prebuilt mysql</code>). MariaDB speaks the MySQL
+  protocol; one tool (<code>list_all_locks</code>) relies on MySQL-only tables.</li>
+<li>Oracle: <code>config/oracle-prod.yaml</code>, 30 tools: 8 Data Guard, 13 performance, 6 space/backup,
+  3 general. All run on the <strong>primary</strong>, which tracks each standby (a mounted standby
+  only accepts SYSDBA/SYSDG logins). Full list: <code>ORACLE-PROD.md</code>.</li>
+</ul>
+<p><strong>How the Oracle lab builds itself</strong> (diagram: <code>ARCHITECTURE.html</code>, <em>How the Data Guard lab
+builds itself</em>): the primary's image creates the database, then
+<code>db/oracle-lab/primary/01-dataguard-primary.sh</code> sets up Data Guard once; the standby's
+own entrypoint <code>db/oracle-lab/standby/standby.sh</code> waits for it, clones the primary with
+RMAN <code>DUPLICATE … FOR STANDBY FROM ACTIVE DATABASE</code> and starts redo apply.</p>
+<hr />
+<h2 id="15-security-model">15. Security model</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Read-only database login</strong></td>
+<td>Toolbox connects with a read-only login everywhere: <code>agent_reader</code> on the demo databases (<code>SELECT</code> on the app tables plus monitoring: Postgres <code>pg_monitor</code>; MySQL/MariaDB <code>PROCESS</code> + <code>performance_schema</code>), <code>C##AGENT_READER</code> on Oracle (<code>CREATE SESSION</code> + <code>SELECT_CATALOG_ROLE</code>, all containers, no application data). The <strong>database itself</strong> refuses writes. Postgres additionally forces read-only transactions and a 10 s statement timeout.</td>
+</tr>
+<tr>
+<td><strong>Admin accounts</strong></td>
+<td>Used only by the setup scripts (and, in the Oracle lab, SYS for building the standby). Never given to Toolbox or the agent.</td>
+</tr>
+<tr>
+<td><strong>Separate passwords</strong></td>
+<td>Each database has its own admin and reader password, generated randomly.</td>
+</tr>
+<tr>
+<td><strong>Model choice</strong></td>
+<td><code>oracle_prod</code> refuses external models unless you allow it for the lab.</td>
+</tr>
+<tr>
+<td><strong>Network</strong></td>
+<td>All database and Toolbox ports bound to <code>127.0.0.1</code>. VM: SSH only. Web UI only through an SSH tunnel.</td>
+</tr>
+<tr>
+<td><strong>Secrets</strong></td>
+<td>In <code>.env</code> (mode 600, git-ignored). The model never sees database passwords.</td>
+</tr>
+<tr>
+<td><strong>Agent limits</strong></td>
+<td>Tool-call cap, one-sentence refusal for write requests. These are conveniences; the database login is the real protection.</td>
+</tr>
+</tbody>
+</table>
+<p>The monitoring grants let the agent see other sessions' query text and server settings.
+That's intended for a DBA. Revoke them if the agent will be used by people who shouldn't
+see that (e.g. <code>REVOKE pg_monitor FROM agent_reader;</code>).</p>
+<p>The lab is for testing: SYS and the reader passwords sit in <code>.env</code>, and the standby is
+built over the network with SYS. Don't reuse these passwords anywhere real.</p>
+<hr />
+<h2 id="16-adding-your-own-database">16. Adding your own database</h2>
+<ol>
+<li><strong>Create a read-only login</strong> on it, copying the grants from the matching
+   <code>db/&lt;engine&gt;/init/</code> script (Oracle: <code>db/oracle-prod/create-agent-reader-*.sql</code>).</li>
+<li><strong>Add a Toolbox service</strong> to <code>docker-compose.yml</code> on a free port (copy an existing
+   <code>toolbox-…</code> block; point <code>*_HOST</code>, <code>*_DATABASE</code>, <code>*_USER</code>, <code>*_PASSWORD</code> at your database;
+   put the password in <code>.env</code>).</li>
+<li><strong>Add it to <code>app/databases.toml</code>:</strong></li>
+</ol>
+<p><code>toml
+   [[database]]
+   key = "sales"
+   name = "Oracle (sales, production)"
+   toolbox_url = "http://127.0.0.1:5005"
+   dialect = "Oracle Database 19c"
+   about = "Sales: orders, invoices, customers. Official source for revenue."
+   notes = """
+   - Tables are in schema SALES: always qualify them.
+   """</code></p>
+<ol start="4">
+<li><code>docker compose up -d</code>, then <code>uv run --env-file .env python scripts/check.py</code>.</li>
+</ol>
+<p>To point <code>oracle_prod</code> at your <strong>real</strong> primary instead of the lab, see <code>ORACLE-PROD.md</code>
+sections 4-5. For business questions you ask often, add <strong>custom tools</strong> (fixed SQL with
+parameters) like those in <code>config/postgres-custom.yaml</code>; they are safer and more
+consistent than free-form SQL.</p>
+<hr />
+<h2 id="17-project-layout">17. Project layout</h2>
+<pre><code>db-agent/
+├── SETUP.md / SETUP.html        this guide
+├── ARCHITECTURE.html            architecture + workflow diagrams (open in a browser)
+├── README.md                    short overview
+├── CLAUDE.md                    instructions for Claude Code: deploy + verify, log to DEPLOY-LOG.md
+├── docs/architecture.svg|png    architecture diagram
+├── docs/workflow-*.svg          workflow diagrams (question, Data Guard build, redo flow)
+├── docker-compose.yml           3 demo databases + Oracle primary/standby + 4 Toolbox servers
+├── .env.example                 settings template (scripts/make-env.sh fills it in)
+├── .streamlit/config.toml       web UI settings (headless, no usage stats; theme menu kept)
+├── pyproject.toml               Python project (uv); uv.lock is created by `uv sync`
+├── app/
+│   ├── agent.py                 the agent + terminal chat
+│   ├── app.py                   web UI (Streamlit)
+│   └── databases.toml           which databases exist, their dialect and notes
+├── config/
+│   ├── postgres-custom.yaml     custom Postgres tools (on top of the built-in ones)
+│   └── oracle-prod.yaml         the 30 Oracle tools (Data Guard, performance, space)
+├── db/&lt;engine&gt;/init/            demo data + read-only login, run once on first start
+├── db/oracle-lab/
+│   ├── primary/01-dataguard-primary.sh   one-time Data Guard setup on the primary
+│   └── standby/standby.sh, healthcheck.sh  builds + runs the physical standby
+├── db/oracle-prod/              create/verify the read-only login on a REAL primary
+├── scripts/
+│   ├── make-env.sh              generates .env
+│   └── check.py                 checks every Toolbox (no model calls)
+├── infra/azure/
+│   └── create-db-agent-vm.sh    creates an Azure VM (run in Cloud Shell)
+├── ORACLE-LAB.md / .html        Oracle 19c Data Guard lab (primary + standby) built by docker compose
+├── ORACLE-PROD.md / .html       oracle_prod: performance + Data Guard tools for your real 19c primary
+└── ADMIN-ACTIONS-DESIGN.md / .html  design for approved admin actions (phase 2)
+</code></pre>
+</main></body></html>

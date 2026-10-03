@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>oracle_prod: Oracle 19c tools</title><style>
+:root{--ink:#1F2933;--sub:#52606D;--line:#D9E2EC;--bg:#FFFFFF;--code:#F5F7FA;--accent:#3B6FD8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 'Segoe UI',Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:22px;margin:36px 0 12px}
+h3{font-size:18px;margin:28px 0 8px}
+a{color:var(--accent)}
+p,li{max-width:80ch}
+img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;margin:12px 0 20px;font-size:14px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#F0F4F8}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13.5px/1.5 Consolas,'DejaVu Sans Mono',monospace}
+pre{background:#1F2933;color:#E4E7EB;padding:14px 16px;border-radius:8px;overflow-x:auto}
+pre code{background:none;color:inherit;padding:0}
+p code,li code,td code{overflow-wrap:anywhere}
+blockquote{margin:16px 0;padding:10px 16px;background:#FFF8E6;border-left:4px solid #D9822B;border-radius:4px}
+blockquote p{margin:4px 0}
+hr{border:none;border-top:1px solid var(--line);margin:28px 0}
+</style></head>
+<body><main>
+<h1 id="oracle_prod-performance-and-data-guard-tools-for-your-real-oracle-19c">oracle_prod: performance and Data Guard tools for your real Oracle 19c</h1>
+<p>The agent's Oracle entry is <strong><code>oracle_prod</code></strong>. It points at an <strong>Oracle 19c primary</strong> (your
+real one, or the Data Guard lab from <code>ORACLE-LAB.md</code>) and comes with 30 read-only tools for:</p>
+<ul>
+<li><strong>Data Guard:</strong> sync, lag and archive gaps.</li>
+<li><strong>Live performance:</strong> waits, top SQL, blocking sessions and execution plans.</li>
+<li><strong>Space:</strong> tablespaces, temp, undo, the Fast Recovery Area (FRA) and RMAN backups.</li>
+</ul>
+<p>When it finds a problem, the agent tells you the cause, shows the evidence, and gives
+the exact commands for a DBA to run. It never runs them itself. That's phase 1.
+Approved actions (click to approve) come in phase 2.</p>
+<p><strong>For a real primary, no database is created.</strong> The only piece is an <strong>MCP Toolbox container</strong>
+that connects out to your primary with a read-only login. (For the home lab, <code>ORACLE-LAB.md</code>
+builds a primary and standby in Docker and points this Toolbox at it; sections 3-5 below are
+then done for you.)</p>
+<hr />
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#1-how-it-fits">How it fits</a></li>
+<li><a href="#2-what-it-can-and-cannot-see">What it can and cannot see</a></li>
+<li><a href="#3-before-you-start">Before you start</a></li>
+<li><a href="#4-create-the-read-only-login">Create the read-only login</a></li>
+<li><a href="#5-switch-it-on">Switch it on</a></li>
+<li><a href="#6-use-it">Use it</a></li>
+<li><a href="#7-the-30-tools">The 30 tools</a></li>
+<li><a href="#8-how-data-guard-is-diagnosed-from-the-primary">How Data Guard is diagnosed from the primary</a></li>
+<li><a href="#9-recommended-actions-what-the-agent-will-and-wont-do">Recommended actions: what the agent will and won't do</a></li>
+<li><a href="#10-test-plan">Test plan</a></li>
+<li><a href="#11-troubleshooting">Troubleshooting</a></li>
+<li><a href="#12-files">Files</a></li>
+<li><a href="#13-next-approved-actions-phase-2">Next: approved actions (phase 2)</a></li>
+</ol>
+<hr />
+<h2 id="1-how-it-fits">1. How it fits</h2>
+<pre><code>              ┌─────────────── your machine (Docker Compose) ───────────────┐
+ you ──► app ─┤► toolbox-oracle-prod  ─────────────────────────────────────────┼──► Oracle 19c PRIMARY
+ (CLI or web) │   (127.0.0.1:5004)                                           │     (read-only login, port 1521)
+              └──────────────────────────────────────────────────────────────┘     lab: oracle-primary container
+                                                                                       │ redo
+                                                                                       ▼
+                                                                         physical standby(s), MOUNTED
+                                                                         (state reported by the primary)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config/oracle-prod.yaml</code></td>
+<td>The 30 tools (SQL) and the connection settings</td>
+</tr>
+<tr>
+<td><code>toolbox-oracle-prod</code> (Compose service)</td>
+<td>Toolbox server on <code>127.0.0.1:5004</code>. Only starts with the <code>oracle-prod</code> profile.</td>
+</tr>
+<tr>
+<td><code>oracle_prod</code> in <code>app/databases.toml</code></td>
+<td>The menu entry, plus the diagnosis rules the agent follows</td>
+</tr>
+<tr>
+<td><code>db/oracle-prod/*.sql</code></td>
+<td>Scripts that create and verify the read-only login</td>
+</tr>
+</tbody>
+</table>
+<p>Full picture of the whole stack: <code>ARCHITECTURE.html</code>.</p>
+<hr />
+<h2 id="2-what-it-can-and-cannot-see">2. What it can and cannot see</h2>
+<p>Your standbys are <strong>mounted</strong>. A mounted database only accepts SYSDBA or SYSDG logins,
+and Toolbox can't use those. So <strong>every tool runs on the primary</strong>, which already tracks
+each standby destination.</p>
+<table>
+<thead>
+<tr>
+<th>Can see (from the primary)</th>
+<th>Cannot see (needs a login on the standby)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Whether redo is shipping to each standby, and any transport error</td>
+<td>The standby's own <code>V$DATAGUARD_STATS</code> (exact transport and apply lag)</td>
+</tr>
+<tr>
+<td>Archive gap status, and which log sequences are missing</td>
+<td><code>V$DATAGUARD_PROCESS</code> / MRP process details</td>
+</tr>
+<tr>
+<td>Whether redo apply is running on the standby (<code>RECOVERY_MODE</code>: <code>IDLE</code> = MRP stopped)</td>
+<td>The standby's alert log, i.e. <em>why</em> MRP stopped</td>
+</tr>
+<tr>
+<td>Last SCN the standby has applied, giving apply lag in minutes</td>
+<td>Standby FRA and space</td>
+</tr>
+<tr>
+<td>Last archived vs applied sequence, per RAC thread</td>
+<td></td>
+</tr>
+<tr>
+<td>Data Guard messages, parameters, standby redo log setup, redo rate</td>
+<td></td>
+</tr>
+<tr>
+<td>Performance, space, FRA and RMAN on the primary, all instances and PDBs</td>
+<td>Performance on the standby</td>
+</tr>
+</tbody>
+</table>
+<p>For "MRP stopped", the agent can tell you <em>that</em> it stopped and give the commands to
+investigate and restart. Finding <em>why</em> means looking at the standby, and that's still
+your job in phase 1.</p>
+<hr />
+<h2 id="3-before-you-start">3. Before you start</h2>
+<table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The machine running the agent can reach the primary's listener</td>
+<td><code>timeout 5 bash -c '&lt;/dev/tcp/&lt;primary-host-or-scan&gt;/1521' &amp;&amp; echo reachable</code></td>
+</tr>
+<tr>
+<td>The project already runs with Docker Compose on that machine</td>
+<td><code>docker compose ps</code> shows the toolboxes</td>
+</tr>
+<tr>
+<td>Whether the primary is a CDB (multitenant) or non-CDB</td>
+<td>as a DBA: <code>SELECT cdb FROM v$database;</code></td>
+</tr>
+<tr>
+<td>The service name to connect to</td>
+<td>CDB: the <strong>root</strong> service (often the DB_UNIQUE_NAME). Non-CDB: the database service. RAC: use the SCAN name.</td>
+</tr>
+<tr>
+<td>Diagnostics Pack licence</td>
+<td>Required for <code>perf_ash_*</code>, <code>perf_sql_plan_awr</code> and <code>perf_sql_plan_history</code>. You confirmed you have it.</td>
+</tr>
+</tbody>
+</table>
+<p>The GKE playground can't reach your company network. Run this on a machine inside your
+network, such as your dev host.</p>
+<hr />
+<h2 id="4-create-the-read-only-login">4. Create the read-only login</h2>
+<p>A DBA runs one script on the <strong>primary</strong>. The user and grants reach the standbys
+automatically through redo.</p>
+<p><strong>CDB (multitenant), connected to CDB$ROOT:</strong></p>
+<pre><code class="language-bash">sqlplus / as sysdba @db/oracle-prod/create-agent-reader-cdb.sql
+</code></pre>
+<p>It asks for a password, then creates <code>C##AGENT_READER</code> with:</p>
+<ul>
+<li><code>CREATE SESSION</code></li>
+<li><code>SELECT_CATALOG_ROLE</code>, which gives read access to the data dictionary, <code>V$</code>/<code>GV$</code>,
+  <code>DBA_</code>/<code>CDB_</code> and <code>DBA_HIST</code> views. It gives <strong>no</strong> access to application tables.</li>
+<li><code>CONTAINER_DATA=ALL</code>. Without this, sessions, SQL and ASH queried from the root would
+  hide everything happening inside the PDBs.</li>
+</ul>
+<p><strong>Non-CDB:</strong></p>
+<pre><code class="language-bash">sqlplus / as sysdba @db/oracle-prod/create-agent-reader-noncdb.sql
+</code></pre>
+<p>This creates <code>AGENT_READER</code> with the same two grants.</p>
+<p>Put the account on a profile your security team approves, so its password doesn't
+expire one day and silently break the agent.</p>
+<p><strong>Verify, as the new user, ideally from the agent's machine:</strong></p>
+<pre><code class="language-bash">sqlplus 'c##agent_reader@//&lt;host-or-scan&gt;:1521/&lt;service&gt;' @db/oracle-prod/verify-agent-reader.sql
+</code></pre>
+<p>Every line should show a value. At the end there's a write test, which <strong>must fail</strong>
+with <code>ORA-01031: insufficient privileges</code>.</p>
+<hr />
+<h2 id="5-switch-it-on">5. Switch it on</h2>
+<p><strong>1. Fill in <code>.env</code>.</strong> These lines are already in <code>.env.example</code>:</p>
+<pre><code class="language-bash">ORACLE_PROD_CONNECTION_STRING=dbprod-scan.example.com:1521/PRODCDB
+ORACLE_PROD_USERNAME=C##AGENT_READER
+ORACLE_PROD_PASSWORD=&lt;the password you chose&gt;
+COMPOSE_PROFILES=oracle-prod
+</code></pre>
+<p><code>COMPOSE_PROFILES=oracle-prod</code> makes <code>docker compose up</code> include the Toolbox. Drop
+<code>oracle-lab</code> from it when you point at a real primary, so the lab databases don't start.</p>
+<p><strong>2. Start it:</strong></p>
+<pre><code class="language-bash">docker compose up -d toolbox-oracle-prod
+docker compose logs --tail 20 toolbox-oracle-prod
+</code></pre>
+<p><strong>You should see:</strong> the Toolbox start-up lines and <em>no</em> <code>ORA-</code> errors. Toolbox
+connects to the database as it starts, so a wrong host, service or password shows up
+here straight away.</p>
+<p><strong>3. Check:</strong></p>
+<pre><code class="language-bash">uv run --env-file .env python scripts/check.py
+</code></pre>
+<p><strong>You should see:</strong> <code>OK    oracle_prod  30 tools  http://127.0.0.1:5004</code> and <code>4/4 databases reachable.</code></p>
+<p>To switch it off again: <code>docker compose stop toolbox-oracle-prod</code>, then empty
+<code>ORACLE_PROD_CONNECTION_STRING</code>. The menu entry only appears when that variable is set.</p>
+<hr />
+<h2 id="6-use-it">6. Use it</h2>
+<p><strong>Model rule:</strong> <code>oracle_prod</code> only runs with an <strong>internal</strong> model (your in-house gateway, not
+OpenAI and not <code>internet/…</code> / <code>zcloud/…</code> connections). With an external model the agent answers
+"Blocked: …" and the web UI disables the question box. For a homelab Data Guard pair with OpenAI,
+set <code>ALLOW_EXTERNAL_MODELS_FOR=oracle_prod</code> in <code>.env</code> (lab only). See SETUP.md section 11a.</p>
+<p>Terminal:</p>
+<pre><code class="language-bash">uv run --env-file .env python app/agent.py      # then pick oracle_prod, or type: use oracle_prod
+</code></pre>
+<p>Web UI: pick <strong>Oracle PROD (primary + Data Guard)</strong> in the sidebar.</p>
+<p>Questions to start with:</p>
+<table>
+<thead>
+<tr>
+<th>Ask</th>
+<th>What the agent does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Is Data Guard healthy?" / "Is the standby in sync?"</td>
+<td><code>dg_health_check</code>, then explains each verdict</td>
+</tr>
+<tr>
+<td>"Why is the standby lagging?"</td>
+<td><code>dg_health_check</code> → <code>dg_apply_progress</code> → <code>dg_redo_rate</code> / <code>dg_destinations</code></td>
+</tr>
+<tr>
+<td>"Do we have an archive gap?"</td>
+<td><code>dg_health_check</code> → <code>dg_missing_logs</code></td>
+</tr>
+<tr>
+<td>"Is redo apply running?"</td>
+<td><code>dg_health_check</code> (<code>recovery_mode</code>)</td>
+</tr>
+<tr>
+<td>"Why is the database slow right now?"</td>
+<td><code>perf_load_profile</code>, <code>perf_waits_now</code> or <code>perf_ash_top_events</code> → <code>perf_ash_top_sql</code></td>
+</tr>
+<tr>
+<td>"What was slow in the last 30 minutes?"</td>
+<td><code>perf_ash_top_events(30)</code>, <code>perf_ash_top_sql(30)</code></td>
+</tr>
+<tr>
+<td>"Who is blocking whom?"</td>
+<td><code>perf_blocking_sessions</code></td>
+</tr>
+<tr>
+<td>"Explain sql_id 7h35uxf5uhmm1" / "Did its plan change?"</td>
+<td><code>perf_sql_details</code>, <code>perf_sql_plan</code>, <code>perf_sql_plan_history</code></td>
+</tr>
+<tr>
+<td>"Which tablespaces are nearly full?"</td>
+<td><code>space_tablespaces</code></td>
+</tr>
+<tr>
+<td>"Is the FRA filling up, and why?"</td>
+<td><code>space_fra_usage</code>, <code>space_rman_config</code>, <code>space_recent_backups</code></td>
+</tr>
+<tr>
+<td>"Any ORA-01555 errors today?"</td>
+<td><code>space_undo</code></td>
+</tr>
+</tbody>
+</table>
+<p>In the CLI, type <code>tools</code> to list all 30 tools.</p>
+<hr />
+<h2 id="7-the-30-tools">7. The 30 tools</h2>
+<p><strong>General</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Parameters</th>
+<th>What it returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>database_overview</code></td>
+<td>–</td>
+<td>Role (PRIMARY), open mode, protection mode and level, switchover status, force logging, flashback, CDB, current SCN, every RAC instance</td>
+</tr>
+<tr>
+<td><code>execute_sql</code></td>
+<td>(SQL)</td>
+<td>Any read-only SELECT, used when no dedicated tool fits</td>
+</tr>
+<tr>
+<td><code>list_invalid_objects</code></td>
+<td>–</td>
+<td>INVALID objects in all PDBs, excluding Oracle-maintained schemas</td>
+</tr>
+<tr>
+<td><code>list_active_sessions</code></td>
+<td>–</td>
+<td>Active user sessions, all instances and PDBs</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data Guard</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Parameters</th>
+<th>What it returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dg_health_check</code></td>
+<td>warn_lag_minutes=10</td>
+<td><strong>Start here.</strong> One row per standby (and per RAC instance), with a verdict (OK / WARNING / CRITICAL / UNKNOWN), apply lag in minutes, gap status, apply mode and transport error</td>
+</tr>
+<tr>
+<td><code>dg_destinations</code></td>
+<td>–</td>
+<td>Transport settings and state: SYNC/ASYNC, AFFIRM, NET_TIMEOUT, REOPEN, DELAY, VALID_FOR, failure count and last failure, error, SRL use</td>
+</tr>
+<tr>
+<td><code>dg_apply_progress</code></td>
+<td>–</td>
+<td>Per standby and RAC thread: last archived, received and applied sequence, logs not received or not applied (NULL = no record)</td>
+</tr>
+<tr>
+<td><code>dg_missing_logs</code></td>
+<td>dest_id</td>
+<td>Log sequences the standby hasn't received above its applied point, and whether each file is still on disk on the primary</td>
+</tr>
+<tr>
+<td><code>dg_messages</code></td>
+<td>errors_only=N</td>
+<td>Recent <code>GV$DATAGUARD_STATUS</code> messages, newest first</td>
+</tr>
+<tr>
+<td><code>dg_standby_redo_logs</code></td>
+<td>–</td>
+<td>Online vs standby redo log groups and sizes per thread</td>
+</tr>
+<tr>
+<td><code>dg_parameters</code></td>
+<td>–</td>
+<td>log_archive_config, log_archive_dest_n, non-ENABLE dest states, fal_server, standby_file_management, name conversions, FRA, …</td>
+</tr>
+<tr>
+<td><code>dg_redo_rate</code></td>
+<td>hours=24</td>
+<td>Redo MB and log switches per hour</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Performance</strong> (GV$, all RAC instances; ASH and AWR tools need the Diagnostics Pack)</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Parameters</th>
+<th>What it returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>perf_load_profile</code></td>
+<td>–</td>
+<td>Last-minute metrics per instance: host CPU, average active sessions, CPU/wait ratio, executions, transactions, hard parses, logons, redo and I/O throughput</td>
+</tr>
+<tr>
+<td><code>perf_waits_now</code></td>
+<td>–</td>
+<td>Active sessions right now, grouped by wait class and event</td>
+</tr>
+<tr>
+<td><code>perf_ash_top_events</code></td>
+<td>minutes=15</td>
+<td>Share of DB time per event over the window (ASH)</td>
+</tr>
+<tr>
+<td><code>perf_ash_top_sql</code></td>
+<td>minutes=15</td>
+<td>Top SQL by DB time over the window, with main event, user, PDB and text (ASH)</td>
+</tr>
+<tr>
+<td><code>perf_blocking_sessions</code></td>
+<td>–</td>
+<td>Blocked sessions and their blockers (who, what, how long)</td>
+</tr>
+<tr>
+<td><code>perf_long_running_sql</code></td>
+<td>min_seconds=60</td>
+<td>Calls running longer than N seconds right now</td>
+</tr>
+<tr>
+<td><code>perf_longops</code></td>
+<td>–</td>
+<td>Long operations with percent done and time remaining</td>
+</tr>
+<tr>
+<td><code>perf_top_sql</code></td>
+<td>metric, limit=10</td>
+<td>Top shared-pool SQL by elapsed time, CPU, reads, gets or executions, with per-execution averages</td>
+</tr>
+<tr>
+<td><code>perf_sql_details</code></td>
+<td>sql_id</td>
+<td>Child cursors, plan hash, per-execution stats, profile or baseline, full text</td>
+</tr>
+<tr>
+<td><code>perf_sql_plan</code></td>
+<td>sql_id</td>
+<td>Cached plan(s) via <code>DBMS_XPLAN.DISPLAY_CURSOR</code>, on the connected instance</td>
+</tr>
+<tr>
+<td><code>perf_sql_plan_awr</code></td>
+<td>sql_id</td>
+<td>Plans captured in AWR (<code>DISPLAY_WORKLOAD_REPOSITORY</code>)</td>
+</tr>
+<tr>
+<td><code>perf_sql_plan_history</code></td>
+<td>sql_id</td>
+<td>Plan hash values over time, with ms and buffer gets per execution, to spot plan regressions</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Space</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Parameters</th>
+<th>What it returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>space_tablespaces</code></td>
+<td>–</td>
+<td>Used vs <strong>max</strong> size (autoextend included), every PDB, fullest first</td>
+</tr>
+<tr>
+<td><code>space_temp_usage</code></td>
+<td>–</td>
+<td>Temp totals per PDB and the top 20 temp-using sessions</td>
+</tr>
+<tr>
+<td><code>space_undo</code></td>
+<td>hours=24</td>
+<td>Longest query, tuned retention, ORA-01555 and undo-space errors per hour</td>
+</tr>
+<tr>
+<td><code>space_fra_usage</code></td>
+<td>–</td>
+<td>FRA limit, used, reclaimable and effective %, by file type</td>
+</tr>
+<tr>
+<td><code>space_rman_config</code></td>
+<td>–</td>
+<td>Non-default RMAN settings, including the archivelog deletion policy</td>
+</tr>
+<tr>
+<td><code>space_recent_backups</code></td>
+<td>days=3</td>
+<td>RMAN jobs with status, duration and size</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-how-data-guard-is-diagnosed-from-the-primary">8. How Data Guard is diagnosed from the primary</h2>
+<p><code>dg_health_check</code> reads <code>GV$ARCHIVE_DEST</code> and <code>GV$ARCHIVE_DEST_STATUS</code> for every
+active standby destination (<code>TARGET='STANDBY'</code>, <code>VALID_NOW='YES'</code>). It then applies
+these checks in order and stops at the first match:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Condition (columns)</th>
+<th>Verdict</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>STATUS = 'DEFERRED'</code></td>
+<td>WARNING</td>
+<td>Someone set <code>log_archive_dest_state_N=DEFER</code>, so redo isn't shipped</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>STATUS &lt;&gt; 'VALID'</code> or <code>ERROR</code> not empty</td>
+<td>CRITICAL</td>
+<td>Transport is failing: network, listener, standby down, password file, standby FRA full</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>GAP_STATUS</code> like <code>%UNRESOLVABLE%</code></td>
+<td>CRITICAL</td>
+<td>Logs are missing that FAL can't fetch automatically</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>RECOVERY_MODE = 'IDLE'</code></td>
+<td>CRITICAL</td>
+<td>Redo apply (MRP) isn't running on the standby</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Applied SCN older than one day (no apply delay configured)</td>
+<td>CRITICAL</td>
+<td>The standby hasn't applied anything for over a day</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>GAP_STATUS = 'RESOLVABLE GAP'</code></td>
+<td>WARNING</td>
+<td>A gap that FAL should close by itself. Re-check in a few minutes.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>APPLIED_SCN = 0</code></td>
+<td>UNKNOWN</td>
+<td>The primary has no applied-SCN information for this destination</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Apply lag &gt; <code>warn_lag_minutes</code></td>
+<td>WARNING</td>
+<td>Applying, but behind</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>RECOVERY_MODE</code> not real-time apply (no delay configured)</td>
+<td>WARNING</td>
+<td>Applying from archived logs only. Usually missing standby redo logs (SRLs).</td>
+</tr>
+<tr>
+<td>–</td>
+<td>none of the above</td>
+<td>OK</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Apply lag</strong> is <code>SYSDATE − SCN_TO_TIMESTAMP(V$ARCHIVE_DEST.APPLIED_SCN)</code>: how old the
+last change the standby has applied is. Three caveats:</p>
+<ul>
+<li><strong>On a primary that has generated no redo for a while</strong>, this overstates the lag,
+  because the last applied change <em>is</em> old. <code>logs_behind</code> and <code>dg_redo_rate</code> tell the
+  two cases apart, and the agent is told to check them.</li>
+<li><code>SCN_TO_TIMESTAMP</code> is accurate to a few seconds.</li>
+<li>The query only converts SCNs from the last day. Anything older is reported as
+  "more than a day" (check 5).</li>
+</ul>
+<p><strong>RAC:</strong> transport is per instance, so each standby appears once per primary instance.
+A problem on one instance only, such as one thread's archiver, shows up on that row.</p>
+<p><strong><code>dg_apply_progress</code> and <code>dg_missing_logs</code></strong> use the primary's archived-log records,
+limited to the last 14 days. Oracle documents the <code>APPLIED</code> flag mainly for the standby
+side, so treat these as <strong>best effort</strong>. NULL means "no record", never "zero". The
+SCN-based lag in <code>dg_health_check</code> is the more reliable number.</p>
+<hr />
+<h2 id="9-recommended-actions-what-the-agent-will-and-wont-do">9. Recommended actions: what the agent will and won't do</h2>
+<p><strong>It will:</strong></p>
+<ul>
+<li>explain the problem with evidence: which tool, which column, which value</li>
+<li>end with <strong>"Recommended actions (run these yourself)"</strong>. For each command it says
+  <em>where</em> to run it (primary or standby), <em>as whom</em> (SYSDBA, SYSDG or DBA), <em>why</em>, and
+  <em>how to verify</em>.</li>
+<li>mark destructive commands (KILL SESSION, RMAN DELETE, resizing) as <strong>DESTRUCTIVE</strong>,
+  with what to check first</li>
+</ul>
+<p><strong>It won't:</strong></p>
+<ul>
+<li>run any command (its login can't)</li>
+<li>claim it fixed anything</li>
+<li>change data, even if asked: it answers in one sentence that it's read-only</li>
+</ul>
+<p>Example of the kind of answer you should get, for "is the standby in sync?" when MRP has
+stopped:</p>
+<blockquote>
+<p><strong>Verdict: CRITICAL.</strong> Redo apply is not running on standby <code>PRODSBY</code>
+(dest 2, <code>recovery_mode = IDLE</code>). Transport is fine: status VALID, no error, no gap.
+The standby is receiving redo but not applying it. Last applied SCN is about 47 minutes old.</p>
+<p><strong>Recommended actions (run these yourself)</strong>
+1. On the <strong>standby</strong>, as SYSDBA or SYSDG, find out why apply stopped: check the alert
+   log for ORA- errors around the time apply stopped, and run
+   <code>SELECT name, role, action, thread#, sequence# FROM v$dataguard_process;</code>
+2. Once the cause is fixed, start apply on the <strong>standby</strong>:
+   <code>ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION;</code>
+3. Verify on the standby: <code>SELECT name, value FROM v$dataguard_stats WHERE name IN ('transport lag','apply lag');</code>
+   then ask me "is Data Guard healthy?" again. Expect <code>MANAGED REAL TIME APPLY</code>.</p>
+</blockquote>
+<p>The rules behind this are the <code>notes</code> of <code>oracle_prod</code> in <code>app/databases.toml</code>. Edit
+them to match your team's runbook, for example your naming, who to page, or extra
+checks. The agent follows them on its next start.</p>
+<hr />
+<h2 id="10-test-plan">10. Test plan</h2>
+<p>The demo Oracle container can't run Data Guard, so these tools were checked in four ways:</p>
+<ul>
+<li>every statement was parsed as Oracle SQL</li>
+<li>every bind and parameter was checked</li>
+<li>view and column names were reviewed against the Oracle 19c Reference</li>
+<li>Toolbox's parameter handling was checked in its source code</li>
+</ul>
+<p><strong>They haven't run against a live Data Guard pair yet.</strong> Test them in this order:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Do</th>
+<th>Expect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>verify-agent-reader.sql</code> as the new user</td>
+<td>All values filled in; the write test fails with ORA-01031</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>check.py</code></td>
+<td><code>oracle_prod 30 tools</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>CLI: <code>use oracle_prod</code>, then <code>tools</code></td>
+<td>30 tools listed</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Ask for each tool once ("run dg_health_check", "run perf_load_profile", …)</td>
+<td>No ORA- errors. Note any tool that errors and send me the message.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Compare <code>dg_health_check</code> with the standby itself (<code>v$dataguard_stats</code> as SYSDBA)</td>
+<td>Apply lag within a minute or so; <code>recovery_mode</code> matches whether MRP runs</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>On a non-production pair only:</strong> stop apply on the standby (<code>… RECOVER MANAGED STANDBY DATABASE CANCEL;</code>), wait 1–2 minutes, ask "is Data Guard healthy?"</td>
+<td>CRITICAL, apply not running, plus the restart command. Then restart apply.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Non-production only:</strong> <code>ALTER SYSTEM SET log_archive_dest_state_2=DEFER;</code>, then ask</td>
+<td>WARNING, DEFERRED, plus the ENABLE command. Then re-enable it.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Performance: run a known slow query in a test PDB, ask "what is slow right now?"</td>
+<td>It finds the sql_id and shows its plan</td>
+</tr>
+</tbody>
+</table>
+<p>Step 4 is the important one. Any tool with a wrong column name for your exact patch
+level fails cleanly with an ORA- error, and it's a one-line fix in <code>config/oracle-prod.yaml</code>.</p>
+<hr />
+<h2 id="11-troubleshooting">11. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>toolbox-oracle-prod</code> keeps restarting; log shows <code>ORA-12514</code> / <code>ORA-12541</code> / timeout</td>
+<td>Wrong host, port or service name, or a firewall</td>
+<td>Test with <code>sqlplus user@//host:1521/service</code> from the same machine. Use the SCAN name on RAC.</td>
+</tr>
+<tr>
+<td>Log shows <code>ORA-01017</code></td>
+<td>Wrong user or password, or a case-sensitive password</td>
+<td>Check <code>.env</code>. Common user names start with <code>C##</code>.</td>
+</tr>
+<tr>
+<td>Log shows <code>ORA-28001</code> (password expired)</td>
+<td>Profile expired the password</td>
+<td>Reset it; put the user on a non-expiring monitoring profile</td>
+</tr>
+<tr>
+<td><code>oracle_prod</code> missing from the menu</td>
+<td><code>ORACLE_PROD_CONNECTION_STRING</code> empty, or the agent was started without <code>--env-file .env</code></td>
+<td>Fill it in; start with <code>uv run --env-file .env …</code></td>
+</tr>
+<tr>
+<td><code>check.py</code>: FAIL oracle_prod, connection refused</td>
+<td>The Toolbox isn't running</td>
+<td><code>COMPOSE_PROFILES=oracle-prod</code> in <code>.env</code>, then <code>docker compose up -d toolbox-oracle-prod</code></td>
+</tr>
+<tr>
+<td>A tool returns <code>ORA-00942: table or view does not exist</code></td>
+<td>Missing grant</td>
+<td>Make sure <code>SELECT_CATALOG_ROLE</code> was granted (<code>CONTAINER=ALL</code> on a CDB)</td>
+</tr>
+<tr>
+<td>Sessions, SQL or ASH show nothing from the PDBs</td>
+<td><code>CONTAINER_DATA</code> not set</td>
+<td><code>ALTER USER c##agent_reader SET CONTAINER_DATA=ALL CONTAINER=CURRENT;</code> in CDB$ROOT</td>
+</tr>
+<tr>
+<td><code>perf_sql_plan</code>: "cannot find cursor"</td>
+<td>Statement aged out, or it's cached on another RAC instance</td>
+<td>Use <code>perf_sql_plan_awr</code></td>
+</tr>
+<tr>
+<td><code>dg_health_check</code> returns no rows</td>
+<td>No active standby destinations, or connected to a <strong>standby</strong></td>
+<td><code>database_overview</code> should say PRIMARY. Check <code>dg_parameters</code>.</td>
+</tr>
+<tr>
+<td>Lag reported while the primary is idle</td>
+<td>See section 8 (no new redo)</td>
+<td>Compare <code>logs_behind</code> and <code>dg_redo_rate</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-files">12. Files</h2>
+<pre><code>config/oracle-prod.yaml                    30 tools + connection (reads ORACLE_PROD_* env)
+app/databases.toml                         [[database]] oracle_prod: menu entry + diagnosis rules (notes)
+app/agent.py, scripts/check.py             skip databases whose requires_env variable is empty
+db/oracle-lab/                             home-lab primary + standby scripts (see ORACLE-LAB.md)
+docker-compose.yml                         service toolbox-oracle-prod (profile oracle-prod, 127.0.0.1:5004)
+.env.example                               ORACLE_PROD_CONNECTION_STRING / USERNAME / PASSWORD, COMPOSE_PROFILES
+db/oracle-prod/create-agent-reader-cdb.sql     login for a CDB (C##AGENT_READER, CONTAINER_DATA=ALL)
+db/oracle-prod/create-agent-reader-noncdb.sql  login for a non-CDB (AGENT_READER)
+db/oracle-prod/verify-agent-reader.sql         run as the login: visibility + write test
+</code></pre>
+<p>Adding your own tool is the same as before: add a <code>kind: tool</code> block to
+<code>config/oracle-prod.yaml</code>, then run <code>docker compose restart toolbox-oracle-prod</code>. The
+agent picks it up when it next connects. Write a clear <code>description</code>: it's what the
+model reads to decide when to use the tool.</p>
+<hr />
+<h2 id="13-next-approved-actions-phase-2">13. Next: approved actions (phase 2)</h2>
+<p>The plan we agreed:</p>
+<ul>
+<li><strong>A small separate action service</strong> with a fixed list of actions. To start: stop MRP,
+  start MRP, defer or enable a destination. Never free-form SQL.</li>
+<li><strong>The agent can only propose an action.</strong> It runs after you click <strong>Approve</strong> in the
+  web UI, or type the approval in the CLI.</li>
+<li><strong>Its own SYSDG login</strong>, kept separate from the read-only one.</li>
+<li><strong>Every action is logged</strong>, with who approved it and when.</li>
+</ul>
+<p>That's also when the standby itself becomes visible (<code>V$DATAGUARD_STATS</code>,
+<code>V$DATAGUARD_PROCESS</code>), through the same privileged path.</p>
+</main></body></html>

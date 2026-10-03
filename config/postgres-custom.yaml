@@ -1,0 +1,71 @@
+# Custom tools that sit alongside --prebuilt postgres.
+# Rule: no name here may match a prebuilt source, tool or toolset name
+# (postgresql-source, list_tables, execute_sql, data, monitor, ...),
+# otherwise Toolbox refuses to start with "resource conflicts detected".
+
+kind: source
+name: shop-db                      # own source; NOT "postgresql-source"
+type: postgres
+host: ${POSTGRES_HOST:db}
+port: ${POSTGRES_PORT:5432}
+database: ${POSTGRES_DATABASE}
+user: ${POSTGRES_USER}
+password: ${POSTGRES_PASSWORD}
+---
+kind: tool
+name: revenue_by_month
+type: postgres-sql
+source: shop-db
+description: >-
+  Revenue and order count per month for a given year, excluding cancelled
+  orders. Use for any monthly sales or revenue trend question.
+parameters:
+  - name: year
+    type: integer
+    description: Four-digit year, e.g. 2026.
+statement: |
+  SELECT to_char(date_trunc('month', o.order_date), 'YYYY-MM') AS month,
+         COUNT(DISTINCT o.order_id) AS orders,
+         SUM(oi.quantity * oi.unit_price) AS revenue
+  FROM orders o
+  JOIN order_items oi ON oi.order_id = o.order_id
+  WHERE o.status <> 'cancelled'
+    AND EXTRACT(YEAR FROM o.order_date) = $1
+  GROUP BY 1
+  ORDER BY 1;
+---
+kind: tool
+name: customer_orders
+type: postgres-sql
+source: shop-db
+description: >-
+  All orders for one customer, looked up by email, with status and order
+  total, newest first.
+parameters:
+  - name: email
+    type: string
+    description: Customer email address.
+statement: |
+  SELECT o.order_id, o.order_date, o.status,
+         SUM(oi.quantity * oi.unit_price) AS order_total
+  FROM customers c
+  JOIN orders o       ON o.customer_id = c.customer_id
+  JOIN order_items oi ON oi.order_id = o.order_id
+  WHERE c.email ILIKE $1
+  GROUP BY o.order_id, o.order_date, o.status
+  ORDER BY o.order_date DESC;
+---
+kind: tool
+name: low_stock_products
+type: postgres-sql
+source: shop-db
+description: Products with stock at or below a threshold, lowest first.
+parameters:
+  - name: threshold
+    type: integer
+    description: Maximum units in stock to include (use 0 for out of stock).
+statement: |
+  SELECT product_id, name, category, in_stock
+  FROM products
+  WHERE in_stock <= $1
+  ORDER BY in_stock, name;

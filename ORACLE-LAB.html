@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Oracle 19c Data Guard lab</title><style>
+:root{--ink:#1F2933;--sub:#52606D;--line:#D9E2EC;--bg:#FFFFFF;--code:#F5F7FA;--accent:#3B6FD8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 'Segoe UI',Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:22px;margin:36px 0 12px}
+h3{font-size:18px;margin:28px 0 8px}
+a{color:var(--accent)}
+p,li{max-width:80ch}
+img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;margin:12px 0 20px;font-size:14px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#F0F4F8}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13.5px/1.5 Consolas,'DejaVu Sans Mono',monospace}
+pre{background:#1F2933;color:#E4E7EB;padding:14px 16px;border-radius:8px;overflow-x:auto}
+pre code{background:none;color:inherit;padding:0}
+p code,li code,td code{overflow-wrap:anywhere}
+blockquote{margin:16px 0;padding:10px 16px;background:#FFF8E6;border-left:4px solid #D9822B;border-radius:4px}
+blockquote p{margin:4px 0}
+hr{border:none;border-top:1px solid var(--line);margin:28px 0}
+</style></head>
+<body><main>
+<h1 id="oracle-19c-data-guard-lab-docker">Oracle 19c Data Guard lab (Docker)</h1>
+<p><code>docker compose up -d</code> builds a 19c <strong>primary</strong> and a <strong>physical standby</strong> from scratch,
+using your image <code>oracle/database:19.3.0-ee-ext</code>. The agent's <code>oracle_prod</code> Toolbox
+connects to the primary. Nothing is set up by hand.</p>
+<p>Diagrams of the build and of redo flow: <code>ARCHITECTURE.html</code>.</p>
+<h2 id="what-gets-created">What gets created</h2>
+<table>
+<thead>
+<tr>
+<th>container</th>
+<th>role</th>
+<th>inside Docker</th>
+<th>on this host</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>oracle-init</code></td>
+<td>one-off: makes the shared volume writable, then exits</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>oracle-primary</code></td>
+<td>CDB <code>ORCLCDB</code> + PDB <code>ORCLPDB1</code>, <code>db_unique_name=ORCLCDB</code>, ARCHIVELOG, FORCE LOGGING</td>
+<td><code>oracle-primary:1521</code></td>
+<td><code>127.0.0.1:1531</code></td>
+</tr>
+<tr>
+<td><code>oracle-standby</code></td>
+<td>physical standby <code>db_unique_name=ORCLCDB_STBY</code>, MOUNTED, real-time apply</td>
+<td><code>oracle-standby:1521</code></td>
+<td><code>127.0.0.1:1532</code></td>
+</tr>
+<tr>
+<td><code>toolbox-oracle-prod</code></td>
+<td>MCP Toolbox, 30 read-only tools, logs in as <code>C##AGENT_READER</code></td>
+<td><code>toolbox-oracle-prod:5000</code></td>
+<td><code>127.0.0.1:5004</code></td>
+</tr>
+</tbody>
+</table>
+<p>Volumes: <code>oraprimary</code>, <code>orastandby</code> (each database's files) and <code>orashared</code> (hand-over
+from primary to standby: password file + service name).</p>
+<p>Data Guard settings (the same as your hand-built pair):</p>
+<table>
+<thead>
+<tr>
+<th>parameter</th>
+<th>primary</th>
+<th>standby</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_archive_config</code></td>
+<td><code>DG_CONFIG=(ORCLCDB,ORCLCDB_STBY)</code></td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>log_archive_dest_2</code></td>
+<td><code>SERVICE=DG_STANDBY ASYNC ... DB_UNIQUE_NAME=ORCLCDB_STBY</code></td>
+<td><code>SERVICE=DG_PRIMARY ASYNC ... DB_UNIQUE_NAME=ORCLCDB</code></td>
+</tr>
+<tr>
+<td><code>fal_server</code></td>
+<td><code>DG_STANDBY</code></td>
+<td><code>DG_PRIMARY</code></td>
+</tr>
+<tr>
+<td><code>standby_file_management</code></td>
+<td><code>AUTO</code></td>
+<td><code>AUTO</code></td>
+</tr>
+<tr>
+<td>standby redo logs</td>
+<td>online groups + 1</td>
+<td>online groups + 1</td>
+</tr>
+<tr>
+<td>broker</td>
+<td>not used</td>
+<td>not used</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-the-build-works">How the build works</h2>
+<ol>
+<li><strong>oracle-init</strong> chowns the <code>orashared</code> volume to <code>oracle</code> and exits.</li>
+<li><strong>oracle-primary</strong> runs the image's normal start-up: <code>createDB.sh</code> makes the CDB
+   (15-40 minutes the first time), then <code>runUserScripts.sh</code> runs
+   <code>db/oracle-lab/primary/01-dataguard-primary.sh</code> <strong>once</strong>. That script turns on force
+   logging, sets the DG parameters, adds standby redo logs, adds the <code>DG_PRIMARY</code> /
+   <code>DG_STANDBY</code> aliases to <code>tnsnames.ora</code>, creates <code>C##AGENT_READER</code>, and copies the password
+   file to <code>orashared</code> with a <code>primary_ready</code> flag.</li>
+<li><strong>oracle-standby</strong> runs <code>db/oracle-lab/standby/standby.sh</code> instead of the image's
+   start-up. It waits for <code>primary_ready</code>, copies the password file, writes its own
+   listener (with a static entry, so RMAN can connect to a NOMOUNT instance), creates the
+   primary's directories, starts a bare instance, then runs
+   <code>DUPLICATE TARGET DATABASE FOR STANDBY FROM ACTIVE DATABASE</code>. Then it adds standby redo
+   logs if needed, starts redo apply (MRP), and re-enables <code>log_archive_dest_2</code> on the
+   primary.</li>
+<li><strong>toolbox-oracle-prod</strong> restarts until the primary accepts logins, then serves the tools.</li>
+</ol>
+<p>Later starts are quick: the primary opens normally, and the standby does <code>STARTUP MOUNT</code>
+and restarts apply. <code>docker compose stop</code> makes both do <code>SHUTDOWN IMMEDIATE</code>.</p>
+<h2 id="using-oracles-registry-image-instead">Using Oracle's registry image instead</h2>
+<p>The build works the same with <code>container-registry.oracle.com/database/enterprise:19.3.0.0</code>:</p>
+<ol>
+<li>Sign in at https://container-registry.oracle.com, open <strong>Database → enterprise</strong> and
+   accept the licence (once).</li>
+<li>On the VM: <code>docker login container-registry.oracle.com</code> (Oracle account e-mail; as the
+   password use an <strong>auth token</strong> from your registry profile if your account has MFA/SSO).</li>
+<li>In <code>.env</code>: <code>ORACLE_IMAGE=container-registry.oracle.com/database/enterprise:19.3.0.0</code>.</li>
+<li><code>docker compose up -d</code> pulls it (about 8 GB) the first time.</li>
+</ol>
+<p>If that image ignores <code>ENABLE_ARCHIVELOG</code>, the primary setup script switches the database
+to ARCHIVELOG itself (you'll see <code>switching to ARCHIVELOG</code> in the log).</p>
+<h2 id="before-you-start">Before you start</h2>
+<ul>
+<li><strong>RAM:</strong> about 8 GB free (2 x (SGA 1.5 GB + PGA 0.5 GB) plus overhead). Smaller:
+  <code>ORACLE_SGA_MB=1024</code>, <code>ORACLE_PGA_MB=256</code> in <code>.env</code>.</li>
+<li><strong>Disk:</strong> about 30 GB in Docker's data directory.</li>
+<li><strong>Image:</strong> <code>docker images oracle/database</code> must show <code>19.3.0-ee-ext</code>.</li>
+<li><strong>Your old pair</strong> (<code>oracle19c</code> / <code>oracle19c-stby</code>) can keep running: the new
+  containers use other names, other volumes, and host ports 1531/1532. Stop the old pair
+  if RAM is tight. <code>oracle_prod</code> now points at the new primary.</li>
+</ul>
+<h2 id="run-it">Run it</h2>
+<pre><code class="language-bash">cd db-agent
+# new install: bash scripts/make-env.sh   (creates .env with random passwords)
+# existing .env: add these lines (letters and digits only in passwords)
+#   ORACLE_IMAGE=oracle/database:19.3.0-ee-ext
+#   ORACLE_SYS_PASSWORD=Ora&lt;random&gt;
+#   ORACLE_PROD_CONNECTION_STRING=oracle-primary:1521/ORCLCDB.localdomain
+#   ORACLE_PROD_USERNAME=C##AGENT_READER
+#   ORACLE_PROD_PASSWORD=Rdr&lt;random&gt;
+#   COMPOSE_PROFILES=oracle-lab,oracle-prod
+#   (and delete ORACLE_LAB_NETWORK if it is there)
+# lab with OpenAI as the model: also uncomment ALLOW_EXTERNAL_MODELS_FOR=oracle_prod
+
+docker compose up -d
+docker compose logs -f oracle-primary     # wait for: DATABASE IS READY TO USE!
+docker compose logs -f oracle-standby     # wait for: STANDBY IS READY TO USE!
+docker compose ps                         # oracle-standby -&gt; (healthy)
+uv run python scripts/check.py            # oracle_prod -&gt; OK, 30 tools
+</code></pre>
+<h2 id="check-data-guard-by-hand">Check Data Guard by hand</h2>
+<pre><code class="language-bash"># primary: is dest 2 shipping?
+docker exec -it oracle-primary bash -c &quot;sqlplus -s / as sysdba &lt;&lt;'EOF'
+select dest_id, status, error from v\$archive_dest where dest_id = 2;
+select max(sequence#) from v\$archived_log where dest_id = 2 and applied = 'YES';
+EOF&quot;
+
+# standby: role, apply, lag
+docker exec -it oracle-standby bash -c &quot;sqlplus -s / as sysdba &lt;&lt;'EOF'
+select database_role, open_mode from v\$database;
+select process, status, sequence# from v\$managed_standby where process like 'MRP%';
+select name, value from v\$dataguard_stats where name in ('transport lag','apply lag');
+EOF&quot;
+</code></pre>
+<p>Then ask the agent (database <code>oracle_prod</code>): <em>"Is Data Guard healthy?"</em>, <em>"What is the
+apply lag?"</em>, <em>"Any archive gaps?"</em>.</p>
+<h2 id="break-it-on-purpose-to-test-the-agent">Break it on purpose (to test the agent)</h2>
+<table>
+<thead>
+<tr>
+<th>test</th>
+<th>how</th>
+<th>the agent should report</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>apply stopped</td>
+<td>standby: <code>alter database recover managed standby database cancel;</code></td>
+<td>apply lag growing, MRP missing</td>
+</tr>
+<tr>
+<td>transport broken</td>
+<td><code>docker stop oracle-standby</code></td>
+<td>dest 2 in ERROR (ORA-12541/12514)</td>
+</tr>
+<tr>
+<td>gap</td>
+<td>stop the standby, primary: <code>alter system archive log current;</code> x5, start the standby</td>
+<td>gap, then FAL catching up</td>
+</tr>
+</tbody>
+</table>
+<p>Restart apply: <code>alter database recover managed standby database disconnect from session;</code></p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>symptom</th>
+<th>cause / fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>standby log stops at "waiting for .../primary_ready"</td>
+<td>the primary is still creating, or its setup script failed: <code>docker compose logs oracle-primary | grep db-agent</code></td>
+</tr>
+<tr>
+<td><code>ERROR: RMAN duplicate failed</code></td>
+<td>read <code>duplicate.log</code> (<code>docker exec oracle-standby cat /opt/oracle/oradata/dbconfig/ORCLCDB_STBY/duplicate.log</code>), fix, <code>docker compose restart oracle-standby</code> (it starts over)</td>
+</tr>
+<tr>
+<td>ORA-01017 during duplicate</td>
+<td>SYS password differs: both containers must get the same <code>ORACLE_SYS_PASSWORD</code>. Changing it after the primary was created does nothing; start over (below)</td>
+</tr>
+<tr>
+<td>toolbox-oracle-prod keeps restarting</td>
+<td>normal until the primary is open; after that check <code>ORACLE_PROD_PASSWORD</code></td>
+</tr>
+<tr>
+<td><code>oracle-init</code> failed</td>
+<td>the image has no <code>oracle</code> user/<code>oinstall</code> group: change the chown to <code>54321:54321</code></td>
+</tr>
+<tr>
+<td>out of memory / ORA-27102</td>
+<td>lower <code>ORACLE_SGA_MB</code> (only takes effect on a fresh build)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Start over</strong> (deletes both lab databases):</p>
+<pre><code class="language-bash">docker compose rm -sf oracle-primary oracle-standby oracle-init
+docker volume rm db-agent_oraprimary db-agent_orastandby db-agent_orashared
+docker compose up -d
+</code></pre>
+<p>(the volume prefix is your folder name; <code>docker volume ls | grep ora</code> shows it)</p>
+<h2 id="files">Files</h2>
+<pre><code>db/oracle-lab/primary/01-dataguard-primary.sh   one-time DG setup on the primary (sourced by the image)
+db/oracle-lab/standby/standby.sh                 standby entrypoint: clone, apply, shutdown trap
+db/oracle-lab/standby/healthcheck.sh             healthy = PHYSICAL STANDBY + MRP running
+docker-compose.yml                               oracle-init / oracle-primary / oracle-standby / toolbox-oracle-prod
+</code></pre>
+<blockquote>
+<p>Lab only. Passwords sit in <code>.env</code>, the standby is built over the network with SYS, and
+there is no broker or backup. Your real primary/standby keep their own setup; for them,
+just point <code>ORACLE_PROD_CONNECTION_STRING</code> at the primary.</p>
+</blockquote>
+</main></body></html>

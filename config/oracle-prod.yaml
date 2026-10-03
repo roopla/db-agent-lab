@@ -1,0 +1,811 @@
+# MCP Toolbox tools for a REAL Oracle 19c primary with physical standbys (Data Guard,
+# no broker, standbys MOUNTED). Every tool is a read-only SELECT on the PRIMARY.
+#
+# Why only the primary: a mounted standby accepts only SYSDBA/SYSDG logins, which
+# Toolbox does not support. The primary tracks each standby destination (transport
+# status and errors, gap status, apply mode, last applied SCN/sequence), so Data Guard
+# health is diagnosed from here. The standby's own V$DATAGUARD_STATS / MRP process
+# details are out of scope for now.
+#
+# Login: read-only user with SELECT_CATALOG_ROLE (db/oracle-prod/create-agent-reader.sql).
+# In a CDB, use a common user connected to CDB$ROOT with CONTAINER_DATA=ALL, so the
+# GV$/CDB_ views include sessions, SQL and tablespaces of every PDB. Results carry CON_ID.
+#
+# Licensing: perf_ash_*, perf_sql_plan_awr and perf_sql_plan_history read Active
+# Session History / AWR and need the Diagnostics Pack. All other tools need no pack.
+#
+# Parameters are positional binds (:1, :2) in the order listed under `parameters`.
+# V$ARCHIVED_LOG queries look back 14 days at most (it is a control-file scan).
+
+kind: source
+name: oracle-prod-source
+type: oracle
+connectionString: ${ORACLE_PROD_CONNECTION_STRING}
+user: ${ORACLE_PROD_USERNAME}
+password: ${ORACLE_PROD_PASSWORD}
+
+# ============================================================================
+# General
+# ============================================================================
+---
+kind: tool
+name: execute_sql
+type: oracle-execute-sql
+source: oracle-prod-source
+description: >-
+  Runs one read-only Oracle 19c SELECT and returns the rows. Use only when no
+  dedicated tool fits. Use FETCH FIRST n ROWS ONLY, no trailing semicolon. The login
+  is read-only: writes, DDL and ALTER commands fail.
+---
+kind: tool
+name: database_overview
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Database identity and Data Guard role: name, DB_UNIQUE_NAME, role (PRIMARY /
+  PHYSICAL STANDBY), open mode, protection mode and level, switchover status,
+  force logging, flashback, log mode, CDB, current SCN, and every instance (RAC)
+  with host, version and startup time.
+statement: |
+  SELECT i.inst_id, i.instance_name, i.host_name, i.version_full, i.status AS instance_status,
+         i.startup_time, ROUND(SYSDATE - i.startup_time, 1) AS uptime_days,
+         d.name AS db_name, d.db_unique_name, d.database_role, d.open_mode,
+         d.protection_mode, d.protection_level, d.switchover_status,
+         d.force_logging, d.flashback_on, d.log_mode, d.cdb, d.current_scn
+    FROM gv$instance i CROSS JOIN v$database d
+   ORDER BY i.inst_id
+---
+kind: tool
+name: list_invalid_objects
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Objects in INVALID state (views, packages, procedures...) in all containers,
+  excluding Oracle-maintained schemas. CON_ID/container show which PDB.
+statement: |
+  SELECT c.name AS container, o.con_id, o.owner, o.object_type, o.object_name, o.last_ddl_time
+    FROM cdb_objects o
+    JOIN cdb_users u ON u.username = o.owner AND u.con_id = o.con_id
+    LEFT JOIN v$containers c ON c.con_id = o.con_id
+   WHERE o.status = 'INVALID'
+     AND u.oracle_maintained = 'N'
+   ORDER BY o.con_id, o.owner, o.object_type, o.object_name
+   FETCH FIRST 200 ROWS ONLY
+
+# ============================================================================
+# Data Guard (diagnosed from the primary)
+# ============================================================================
+---
+kind: tool
+name: dg_health_check
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  START HERE for any Data Guard / standby / sync / lag question. One row per standby
+  destination per primary instance (RAC) with a VERDICT (OK / WARNING / CRITICAL /
+  UNKNOWN) and the reason. Checks: destination state (VALID, DEFERRED, ERROR) and
+  transport error, gap status, apply mode reported by the standby (IDLE = redo apply
+  / MRP is not running), and apply lag in minutes = age of the last SCN the standby
+  has applied (from V$ARCHIVE_DEST.APPLIED_SCN). Note: on a primary that generated
+  no redo for a while, apply_lag_minutes can overstate the lag; logs_behind and
+  dg_redo_rate help confirm. Parameter: warn_lag_minutes (default 10).
+statement: |
+  WITH dest AS (
+    SELECT s.inst_id, s.dest_id, s.db_unique_name, d.destination, d.status, s.error,
+           s.gap_status, s.recovery_mode, s.database_mode, s.synchronization_status,
+           d.transmit_mode, d.delay_mins, d.applied_scn,
+           s.archived_thread#, s.archived_seq#, s.applied_thread#, s.applied_seq#
+      FROM gv$archive_dest_status s
+      JOIN gv$archive_dest d ON d.inst_id = s.inst_id AND d.dest_id = s.dest_id
+     WHERE d.target = 'STANDBY'
+       AND d.status <> 'INACTIVE'
+       AND d.valid_now = 'YES'
+  ),
+  scn_day AS (
+    SELECT MIN(first_change#) AS min_scn FROM v$log_history WHERE first_time > SYSDATE - 1
+  ),
+  lagged AS (
+    SELECT dest.*,
+           CASE WHEN dest.applied_scn > 0 AND dest.applied_scn >= scn_day.min_scn
+                THEN ROUND((SYSDATE - CAST(SCN_TO_TIMESTAMP(dest.applied_scn) AS DATE)) * 1440, 1)
+           END AS apply_lag_minutes,
+           CASE WHEN dest.applied_scn > 0 AND dest.applied_scn < scn_day.min_scn
+                THEN 'YES' ELSE 'NO' END AS applied_scn_older_than_1_day,
+           CASE WHEN dest.archived_thread# = dest.applied_thread#
+                THEN GREATEST(dest.archived_seq# - dest.applied_seq#, 0) END AS logs_behind
+      FROM dest CROSS JOIN scn_day
+  )
+  SELECT inst_id, dest_id, db_unique_name AS standby, destination, status, error,
+         gap_status, recovery_mode, database_mode, transmit_mode, synchronization_status,
+         delay_mins, applied_scn, apply_lag_minutes, applied_scn_older_than_1_day,
+         archived_seq#, applied_seq#, logs_behind,
+         CASE
+           WHEN status = 'DEFERRED'
+             THEN 'WARNING: destination is DEFERRED - redo is not being shipped (log_archive_dest_state_' || dest_id || ')'
+           WHEN status <> 'VALID' OR error IS NOT NULL
+             THEN 'CRITICAL: redo transport to this standby is failing (see status/error)'
+           WHEN gap_status LIKE '%UNRESOLVABLE%'
+             THEN 'CRITICAL: archive gap that cannot be resolved automatically'
+           WHEN recovery_mode = 'IDLE'
+             THEN 'CRITICAL: redo apply (MRP) is not running on the standby'
+           WHEN applied_scn_older_than_1_day = 'YES' AND NVL(delay_mins, 0) = 0
+             THEN 'CRITICAL: standby has not applied redo for more than a day'
+           WHEN gap_status = 'RESOLVABLE GAP'
+             THEN 'WARNING: archive gap, should resolve automatically via FAL'
+           WHEN NVL(applied_scn, 0) = 0
+             THEN 'UNKNOWN: primary has no applied-SCN information for this standby'
+           WHEN NVL(delay_mins, 0) = 0 AND apply_lag_minutes > :1
+             THEN 'WARNING: apply lag about ' || apply_lag_minutes || ' minutes'
+           WHEN NVL(delay_mins, 0) = 0 AND recovery_mode NOT LIKE '%REAL TIME APPLY%'
+             THEN 'WARNING: redo apply running but not real-time apply'
+           ELSE 'OK'
+         END AS verdict
+    FROM lagged
+   ORDER BY dest_id, inst_id
+parameters:
+  - name: warn_lag_minutes
+    type: integer
+    description: "Warn when apply lag exceeds this many minutes (default 10)."
+    default: 10
+---
+kind: tool
+name: dg_destinations
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Full redo transport configuration and state of every standby archive destination,
+  per primary instance (RAC): SYNC/ASYNC, AFFIRM, NET_TIMEOUT, REOPEN, DELAY,
+  VALID_FOR role, compression, failure count, last failure time and sequence,
+  error, and whether the standby uses standby redo logs (SRL).
+statement: |
+  SELECT d.inst_id, d.dest_id, d.dest_name, d.db_unique_name, d.destination, d.status,
+         d.transmit_mode, d.affirm, d.net_timeout, d.reopen_secs, d.delay_mins,
+         d.valid_now, d.valid_type, d.valid_role, d.compression,
+         d.log_sequence, d.fail_date, d.fail_sequence, d.failure_count, d.max_failure,
+         d.error, s.srl, s.standby_logfile_count, s.standby_logfile_active
+    FROM gv$archive_dest d
+    LEFT JOIN gv$archive_dest_status s ON s.inst_id = d.inst_id AND s.dest_id = d.dest_id
+   WHERE d.target = 'STANDBY'
+     AND d.status <> 'INACTIVE'
+   ORDER BY d.dest_id, d.inst_id
+---
+kind: tool
+name: dg_apply_progress
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Best-effort, log-level view per standby and per redo thread from the primary's
+  archived-log records (last 14 days): the primary's last archived sequence, the
+  last sequence recorded as received and as applied for that standby, and how many
+  logs are not yet received / applied. NULL means the primary has no record (not
+  zero). Use after dg_health_check to see which RAC thread is behind; for minutes of
+  lag use dg_health_check.
+statement: |
+  WITH dest AS (
+    SELECT DISTINCT dest_id, db_unique_name
+      FROM gv$archive_dest
+     WHERE target = 'STANDBY' AND status <> 'INACTIVE' AND valid_now = 'YES'
+  ),
+  logs AS (
+    SELECT standby_dest, dest_id, thread#, sequence#, next_time, applied
+      FROM v$archived_log
+     WHERE resetlogs_change# = (SELECT resetlogs_change# FROM v$database)
+       AND first_time > SYSDATE - 14
+  ),
+  loc AS (
+    SELECT thread#, MAX(sequence#) AS last_seq, MAX(next_time) AS last_archived_time
+      FROM logs WHERE standby_dest = 'NO'
+     GROUP BY thread#
+  ),
+  rem AS (
+    SELECT dest_id, thread#,
+           MAX(sequence#) AS received_seq,
+           MAX(CASE WHEN applied IN ('YES', 'IN-MEMORY') THEN sequence# END) AS applied_seq
+      FROM logs WHERE standby_dest = 'YES'
+     GROUP BY dest_id, thread#
+  )
+  SELECT d.dest_id, d.db_unique_name AS standby, l.thread#,
+         l.last_seq AS primary_last_archived_seq, l.last_archived_time,
+         r.received_seq, r.applied_seq,
+         CASE WHEN r.received_seq IS NOT NULL THEN GREATEST(l.last_seq - r.received_seq, 0) END AS logs_not_received,
+         CASE WHEN r.applied_seq IS NOT NULL THEN GREATEST(l.last_seq - r.applied_seq, 0) END AS logs_not_applied
+    FROM dest d
+   CROSS JOIN loc l
+    LEFT JOIN rem r ON r.dest_id = d.dest_id AND r.thread# = l.thread#
+   ORDER BY d.dest_id, l.thread#
+---
+kind: tool
+name: dg_missing_logs
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Archived log sequences (last 14 days) that exist on the primary but that a given
+  standby destination has no record of receiving, above its last applied sequence:
+  the candidates for an archive gap. Shows whether a copy is still on disk on the
+  primary (STILL_ON_DISK = NO means it must be restored from backup to close the
+  gap) and its file name. Parameter: dest_id (e.g. 2).
+statement: |
+  WITH p AS (SELECT :1 AS dest_id FROM dual),
+  logs AS (
+    SELECT standby_dest, dest_id, thread#, sequence#, first_time, next_time,
+           name, status, applied
+      FROM v$archived_log
+     WHERE resetlogs_change# = (SELECT resetlogs_change# FROM v$database)
+       AND first_time > SYSDATE - 14
+  ),
+  local_logs AS (
+    SELECT thread#, sequence#, MIN(first_time) AS first_time, MAX(next_time) AS next_time,
+           MAX(CASE WHEN status = 'A' THEN name END) AS file_on_primary,
+           CASE WHEN MAX(CASE WHEN status = 'A' THEN 1 ELSE 0 END) = 1 THEN 'YES' ELSE 'NO' END AS still_on_disk
+      FROM logs WHERE standby_dest = 'NO'
+     GROUP BY thread#, sequence#
+  ),
+  remote AS (
+    SELECT l.thread#, l.sequence#, l.applied
+      FROM logs l, p
+     WHERE l.standby_dest = 'YES' AND l.dest_id = p.dest_id
+  ),
+  applied AS (
+    SELECT thread#, MAX(sequence#) AS applied_seq
+      FROM remote WHERE applied IN ('YES', 'IN-MEMORY')
+     GROUP BY thread#
+  )
+  SELECT ll.thread#, ll.sequence#, ll.first_time, ll.next_time,
+         ll.still_on_disk, ll.file_on_primary
+    FROM local_logs ll
+    LEFT JOIN applied a ON a.thread# = ll.thread#
+   WHERE ll.sequence# > NVL(a.applied_seq, 0)
+     AND NOT EXISTS (SELECT 1 FROM remote r
+                      WHERE r.thread# = ll.thread# AND r.sequence# = ll.sequence#)
+   ORDER BY ll.thread#, ll.sequence#
+   FETCH FIRST 100 ROWS ONLY
+parameters:
+  - name: dest_id
+    type: integer
+    description: "Standby archive destination number (DEST_ID from dg_health_check), e.g. 2."
+---
+kind: tool
+name: dg_messages
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Recent Data Guard messages on the primary, all instances (GV$DATAGUARD_STATUS):
+  transport errors, reconnects, gap requests, archiver problems. Newest first.
+  Parameter: errors_only ('Y' = only Error/Fatal/Warning, default 'N').
+statement: |
+  SELECT inst_id, timestamp, facility, severity, dest_id, error_code, message
+    FROM gv$dataguard_status
+   WHERE (UPPER(:1) = 'N' OR severity IN ('Error', 'Fatal', 'Warning'))
+   ORDER BY timestamp DESC
+   FETCH FIRST 60 ROWS ONLY
+parameters:
+  - name: errors_only
+    type: string
+    description: "'Y' for only Error/Fatal/Warning messages, 'N' for all (default)."
+    default: "N"
+---
+kind: tool
+name: dg_standby_redo_logs
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Online redo logs vs standby redo logs (SRLs) per thread on the primary: group
+  count and size. Oracle's rule: for each thread, at least one more SRL group than
+  online log groups, same size as the online logs. SRLs created without a THREAD
+  clause show THREAD# 0. Needed for real-time apply after a role switch; check the
+  same on each standby.
+statement: |
+  SELECT 'ONLINE' AS log_type, thread#, COUNT(*) AS groups,
+         ROUND(MAX(bytes) / 1048576) AS max_mb, ROUND(MIN(bytes) / 1048576) AS min_mb
+    FROM v$log
+   GROUP BY thread#
+  UNION ALL
+  SELECT 'STANDBY', thread#, COUNT(*),
+         ROUND(MAX(bytes) / 1048576), ROUND(MIN(bytes) / 1048576)
+    FROM v$standby_log
+   GROUP BY thread#
+   ORDER BY 2, 1
+---
+kind: tool
+name: dg_parameters
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Data Guard related initialization parameters (non-empty values only), all
+  instances: log_archive_config, log_archive_dest_n and non-ENABLE
+  log_archive_dest_state_n, fal_server, standby_file_management,
+  db_file/log_file_name_convert, archive_lag_target, dg_broker_start,
+  db_recovery_file_dest(_size), remote_login_passwordfile, etc.
+statement: |
+  SELECT inst_id, name, value
+    FROM gv$parameter
+   WHERE value IS NOT NULL
+     AND (   name LIKE 'log\_archive\_dest\_%' ESCAPE '\'
+          OR name IN ('log_archive_config', 'fal_server', 'fal_client', 'db_unique_name',
+                      'db_name', 'standby_file_management', 'db_file_name_convert',
+                      'log_file_name_convert', 'archive_lag_target', 'dg_broker_start',
+                      'log_archive_max_processes', 'log_archive_format',
+                      'db_recovery_file_dest', 'db_recovery_file_dest_size',
+                      'remote_login_passwordfile', 'db_flashback_retention_target'))
+     AND NOT (name LIKE 'log\_archive\_dest\_state\_%' ESCAPE '\' AND UPPER(value) = 'ENABLE')
+   ORDER BY name, inst_id
+---
+kind: tool
+name: dg_redo_rate
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Redo generated per hour (MB) and log switches per hour, all threads, for the last
+  N hours (each archived log counted once). Explains lag spikes (batch jobs, loads)
+  and checks log switch frequency. Parameter: hours (default 24, max 336).
+statement: |
+  SELECT TRUNC(first_time, 'HH24') AS hour,
+         ROUND(SUM(bytes) / 1048576) AS redo_mb,
+         COUNT(*) AS log_switches
+    FROM (SELECT thread#, sequence#, MIN(first_time) AS first_time,
+                 MAX(blocks * block_size) AS bytes
+            FROM v$archived_log
+           WHERE standby_dest = 'NO'
+             AND first_time > SYSDATE - LEAST(:1, 336) / 24
+             AND resetlogs_change# = (SELECT resetlogs_change# FROM v$database)
+           GROUP BY thread#, sequence#)
+   GROUP BY TRUNC(first_time, 'HH24')
+   ORDER BY hour
+parameters:
+  - name: hours
+    type: integer
+    description: "How many hours back (default 24, max 336)."
+    default: 24
+
+# ============================================================================
+# Live performance (RAC-aware: GV$ views; INST_ID = instance, CON_ID = container)
+# ============================================================================
+---
+kind: tool
+name: perf_load_profile
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Current load per instance (last 60-second metrics): host CPU %, average active
+  sessions, DB CPU vs wait ratio, executions, transactions, hard parses and logons
+  per second, redo and physical read/write throughput, OS load. START HERE for "is
+  the database slow / busy right now".
+statement: |
+  SELECT inst_id, metric_name, ROUND(value, 2) AS value, metric_unit, end_time
+    FROM gv$sysmetric
+   WHERE group_id = 2
+     AND metric_name IN ('Host CPU Utilization (%)', 'Average Active Sessions',
+                         'Database CPU Time Ratio', 'Database Wait Time Ratio',
+                         'Executions Per Sec', 'User Transaction Per Sec',
+                         'Hard Parse Count Per Sec', 'Logons Per Sec',
+                         'Redo Generated Per Sec', 'Physical Read Total Bytes Per Sec',
+                         'Physical Write Total Bytes Per Sec', 'Current OS Load')
+   ORDER BY inst_id, metric_name
+---
+kind: tool
+name: perf_waits_now
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  What active user sessions are doing right now, grouped by instance, wait class
+  and event (ON CPU when not waiting), with session counts. A quick snapshot of
+  where time is going at this moment.
+statement: |
+  SELECT inst_id,
+         CASE WHEN state = 'WAITING' THEN wait_class ELSE 'CPU' END AS wait_class,
+         CASE WHEN state = 'WAITING' THEN event ELSE 'ON CPU' END AS event,
+         COUNT(*) AS sessions
+    FROM gv$session
+   WHERE status = 'ACTIVE'
+     AND type = 'USER'
+     AND NOT (state = 'WAITING' AND wait_class = 'Idle')
+   GROUP BY inst_id,
+            CASE WHEN state = 'WAITING' THEN wait_class ELSE 'CPU' END,
+            CASE WHEN state = 'WAITING' THEN event ELSE 'ON CPU' END
+   ORDER BY sessions DESC
+   FETCH FIRST 30 ROWS ONLY
+---
+kind: tool
+name: perf_ash_top_events
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Top wait events and CPU over the last N minutes from Active Session History
+  (Diagnostics Pack): share of DB time per wait class / event, all instances. Better
+  than a snapshot for "what was slow in the last 15 minutes". Parameter: minutes
+  (default 15, max 120).
+statement: |
+  SELECT NVL(wait_class, 'CPU') AS wait_class, NVL(event, 'ON CPU') AS event,
+         COUNT(*) AS samples,
+         ROUND(RATIO_TO_REPORT(COUNT(*)) OVER () * 100, 1) AS pct_db_time
+    FROM gv$active_session_history
+   WHERE sample_time > CAST(SYSTIMESTAMP AS TIMESTAMP) - NUMTODSINTERVAL(LEAST(:1, 120), 'MINUTE')
+   GROUP BY NVL(wait_class, 'CPU'), NVL(event, 'ON CPU')
+   ORDER BY samples DESC
+   FETCH FIRST 15 ROWS ONLY
+parameters:
+  - name: minutes
+    type: integer
+    description: "Look-back window in minutes (default 15, max 120)."
+    default: 15
+---
+kind: tool
+name: perf_ash_top_sql
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Top SQL by DB time over the last N minutes from Active Session History
+  (Diagnostics Pack), all instances: sql_id, container, share of DB time, main wait
+  event, user, and the start of the SQL text. Parameter: minutes (default 15, max 120).
+statement: |
+  WITH top AS (
+    SELECT sql_id, con_id, COUNT(*) AS samples,
+           ROUND(RATIO_TO_REPORT(COUNT(*)) OVER () * 100, 1) AS pct_db_time,
+           STATS_MODE(NVL(event, 'ON CPU')) AS main_event,
+           MAX(user_id) AS user_id
+      FROM gv$active_session_history
+     WHERE sample_time > CAST(SYSTIMESTAMP AS TIMESTAMP) - NUMTODSINTERVAL(LEAST(:1, 120), 'MINUTE')
+       AND sql_id IS NOT NULL
+     GROUP BY sql_id, con_id
+     ORDER BY samples DESC
+     FETCH FIRST 10 ROWS ONLY
+  )
+  SELECT t.sql_id, t.con_id, t.samples, t.pct_db_time, t.main_event, u.username,
+         (SELECT SUBSTR(MAX(q.sql_text), 1, 150) FROM gv$sqlstats q WHERE q.sql_id = t.sql_id) AS sql_text
+    FROM top t
+    LEFT JOIN cdb_users u ON u.user_id = t.user_id AND u.con_id = t.con_id
+   ORDER BY t.samples DESC
+parameters:
+  - name: minutes
+    type: integer
+    description: "Look-back window in minutes (default 15, max 120)."
+    default: 15
+---
+kind: tool
+name: perf_blocking_sessions
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Sessions that are blocked, with who blocks them (instance, SID, user, program,
+  status, what the blocker is running), the wait event and how many seconds they
+  have waited. Use for "hanging", "locks", "blocked", "enqueue" questions.
+statement: |
+  SELECT w.inst_id, w.con_id, w.sid, w.serial#, w.username, w.program, w.event,
+         ROUND(w.wait_time_micro / 1e6) AS seconds_waiting, w.sql_id,
+         w.blocking_instance, w.blocking_session,
+         b.serial# AS blocker_serial#, b.username AS blocker_username,
+         b.program AS blocker_program, b.machine AS blocker_machine, b.status AS blocker_status,
+         b.sql_id AS blocker_sql_id, b.prev_sql_id AS blocker_prev_sql_id,
+         b.last_call_et AS blocker_seconds_in_state
+    FROM gv$session w
+    LEFT JOIN gv$session b ON b.inst_id = w.blocking_instance AND b.sid = w.blocking_session
+   WHERE w.blocking_session IS NOT NULL
+     AND w.blocking_session_status = 'VALID'
+   ORDER BY w.wait_time_micro DESC
+   FETCH FIRST 50 ROWS ONLY
+---
+kind: tool
+name: perf_long_running_sql
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  User SQL that has been running continuously for more than N seconds right now:
+  instance, container, SID, user, program, sql_id, seconds in this call, current
+  wait event, SQL text. Parameter: min_seconds (default 60).
+statement: |
+  SELECT s.inst_id, s.con_id, s.sid, s.serial#, s.username, s.program, s.machine, s.sql_id,
+         s.last_call_et AS seconds_running,
+         CASE WHEN s.state = 'WAITING' THEN s.event ELSE 'ON CPU' END AS current_wait,
+         (SELECT SUBSTR(MAX(q.sql_text), 1, 200) FROM gv$sqlstats q
+           WHERE q.inst_id = s.inst_id AND q.sql_id = s.sql_id) AS sql_text
+    FROM gv$session s
+   WHERE s.status = 'ACTIVE'
+     AND s.type = 'USER'
+     AND s.last_call_et > :1
+     AND NOT (s.state = 'WAITING' AND s.wait_class = 'Idle')
+   ORDER BY s.last_call_et DESC
+   FETCH FIRST 50 ROWS ONLY
+parameters:
+  - name: min_seconds
+    type: integer
+    description: "Only calls running longer than this many seconds (default 60)."
+    default: 60
+---
+kind: tool
+name: perf_longops
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Long operations in progress (full scans, sorts, RMAN backups, index builds...)
+  with percent done and estimated seconds remaining.
+statement: |
+  SELECT inst_id, sid, serial#, username, opname, target, sql_id,
+         ROUND(sofar / NULLIF(totalwork, 0) * 100, 1) AS pct_done,
+         elapsed_seconds, time_remaining AS seconds_remaining, message
+    FROM gv$session_longops
+   WHERE totalwork > 0
+     AND sofar < totalwork
+   ORDER BY time_remaining DESC
+   FETCH FIRST 50 ROWS ONLY
+---
+kind: tool
+name: perf_top_sql
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Top SQL in the shared pool (since loaded), per instance, by a metric:
+  elapsed_time (default), cpu_time, disk_reads, buffer_gets or executions. Shows
+  per-execution averages too. Parameters: metric, limit (default 10, max 50).
+statement: |
+  SELECT inst_id, con_id, sql_id, plan_hash_value, executions,
+         ROUND(elapsed_time / 1e6) AS elapsed_s,
+         ROUND(cpu_time / 1e6) AS cpu_s,
+         ROUND(elapsed_time / NULLIF(executions, 0) / 1e3, 1) AS ms_per_exec,
+         ROUND(buffer_gets / NULLIF(executions, 0)) AS gets_per_exec,
+         disk_reads, rows_processed, last_active_time,
+         SUBSTR(sql_text, 1, 150) AS sql_text
+    FROM gv$sqlstats
+   ORDER BY CASE UPPER(:1)
+              WHEN 'CPU_TIME'    THEN cpu_time
+              WHEN 'DISK_READS'  THEN disk_reads
+              WHEN 'BUFFER_GETS' THEN buffer_gets
+              WHEN 'EXECUTIONS'  THEN executions
+              ELSE elapsed_time
+            END DESC
+   FETCH FIRST LEAST(:2, 50) ROWS ONLY
+parameters:
+  - name: metric
+    type: string
+    description: "elapsed_time (default), cpu_time, disk_reads, buffer_gets or executions."
+    default: "elapsed_time"
+  - name: limit
+    type: integer
+    description: "How many statements (default 10, max 50)."
+    default: 10
+---
+kind: tool
+name: perf_sql_details
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Everything the shared pool knows about one sql_id, per instance and child
+  cursor: plan_hash_value, executions, ms per execution, CPU, buffer gets and
+  disk reads per execution, rows, parsing schema, SQL profile / plan baseline in
+  use, first load and last active time, and the SQL text (first 1000 characters).
+  Parameter: sql_id.
+statement: |
+  SELECT inst_id, con_id, child_number, plan_hash_value, executions,
+         ROUND(elapsed_time / NULLIF(executions, 0) / 1e3, 1) AS ms_per_exec,
+         ROUND(cpu_time / NULLIF(executions, 0) / 1e3, 1) AS cpu_ms_per_exec,
+         ROUND(buffer_gets / NULLIF(executions, 0)) AS gets_per_exec,
+         ROUND(disk_reads / NULLIF(executions, 0)) AS reads_per_exec,
+         rows_processed, parsing_schema_name, first_load_time, last_active_time,
+         sql_profile, sql_plan_baseline,
+         DBMS_LOB.SUBSTR(sql_fulltext, 1000, 1) AS sql_text
+    FROM gv$sql
+   WHERE sql_id = :1
+   ORDER BY inst_id, child_number
+parameters:
+  - name: sql_id
+    type: string
+    description: "The 13-character SQL_ID, e.g. 7h35uxf5uhmm1."
+---
+kind: tool
+name: perf_sql_plan
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Cached execution plan(s) of a sql_id (DBMS_XPLAN.DISPLAY_CURSOR, child cursor(s) in memory),
+  with predicates, on the instance this login is connected to. Use to explain why
+  a query is slow (full scans, join methods, cardinality). On RAC, if it says the
+  cursor cannot be found, it is on another instance: use perf_sql_plan_awr.
+  Parameter: sql_id.
+statement: |
+  SELECT plan_table_output
+    FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(:1, NULL, 'TYPICAL'))
+parameters:
+  - name: sql_id
+    type: string
+    description: "The 13-character SQL_ID."
+---
+kind: tool
+name: perf_sql_plan_awr
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  All execution plans AWR has captured for a sql_id
+  (DBMS_XPLAN.DISPLAY_WORKLOAD_REPOSITORY, Diagnostics Pack), across instances and
+  over time. Use when the cursor is no longer in memory, is on another RAC
+  instance, or to compare an old and a new plan. Parameter: sql_id.
+statement: |
+  SELECT plan_table_output
+    FROM TABLE(DBMS_XPLAN.DISPLAY_WORKLOAD_REPOSITORY(sql_id => :1, format => 'TYPICAL'))
+parameters:
+  - name: sql_id
+    type: string
+    description: "The 13-character SQL_ID."
+---
+kind: tool
+name: perf_sql_plan_history
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Plan history of a sql_id from AWR (Diagnostics Pack): per plan_hash_value, first
+  and last time seen, executions and average elapsed ms and buffer gets per
+  execution. A newer plan with much higher ms/exec is a plan regression.
+  Parameter: sql_id.
+statement: |
+  SELECT st.plan_hash_value,
+         MIN(sn.begin_interval_time) AS first_seen,
+         MAX(sn.end_interval_time) AS last_seen,
+         SUM(st.executions_delta) AS executions,
+         ROUND(SUM(st.elapsed_time_delta) / NULLIF(SUM(st.executions_delta), 0) / 1e3, 1) AS ms_per_exec,
+         ROUND(SUM(st.buffer_gets_delta) / NULLIF(SUM(st.executions_delta), 0)) AS gets_per_exec
+    FROM dba_hist_sqlstat st
+    JOIN dba_hist_snapshot sn
+      ON sn.snap_id = st.snap_id AND sn.dbid = st.dbid AND sn.instance_number = st.instance_number
+   WHERE st.sql_id = :1
+     AND st.dbid = (SELECT dbid FROM v$database)
+   GROUP BY st.plan_hash_value
+   ORDER BY first_seen
+parameters:
+  - name: sql_id
+    type: string
+    description: "The 13-character SQL_ID."
+---
+kind: tool
+name: list_active_sessions
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Active user sessions on all instances and containers: instance, container, SID,
+  user, OS user, machine, program, module, seconds in current call, wait event, sql_id.
+statement: |
+  SELECT inst_id, con_id, sid, serial#, username, osuser, machine, program, module,
+         last_call_et AS seconds_in_call,
+         CASE WHEN state = 'WAITING' THEN event ELSE 'ON CPU' END AS current_wait,
+         sql_id
+    FROM gv$session
+   WHERE status = 'ACTIVE'
+     AND type = 'USER'
+   ORDER BY last_call_et DESC
+   FETCH FIRST 100 ROWS ONLY
+
+# ============================================================================
+# Space, temp, undo, FRA, RMAN
+# ============================================================================
+---
+kind: tool
+name: space_tablespaces
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Tablespace usage in every container, measured against the MAXIMUM size
+  (autoextend included): used GB, max GB, percent used, contents. Fullest first.
+  UNDO tablespaces always look nearly full here (expired undo counts as used): use
+  space_undo for undo. Use for "running out of space" questions.
+statement: |
+  SELECT c.name AS container, m.con_id, m.tablespace_name, t.contents, t.bigfile,
+         ROUND(m.used_space * t.block_size / 1073741824, 2) AS used_gb,
+         ROUND(m.tablespace_size * t.block_size / 1073741824, 2) AS max_gb,
+         ROUND(m.used_percent, 1) AS used_pct
+    FROM cdb_tablespace_usage_metrics m
+    JOIN cdb_tablespaces t ON t.tablespace_name = m.tablespace_name AND t.con_id = m.con_id
+    LEFT JOIN v$containers c ON c.con_id = m.con_id
+   ORDER BY m.used_percent DESC
+   FETCH FIRST 100 ROWS ONLY
+---
+kind: tool
+name: space_temp_usage
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Temporary tablespaces in every container: total, allocated and free MB, plus the
+  20 sessions currently using the most temp (instance, container, SID, user, the
+  sql_id that created the temp segment, segment type, MB). Use for ORA-01652 or
+  "temp full".
+statement: |
+  SELECT 'TOTAL' AS row_type, f.con_id, f.tablespace_name,
+         CAST(NULL AS NUMBER) AS inst_id, CAST(NULL AS NUMBER) AS sid,
+         CAST(NULL AS VARCHAR2(128)) AS username, CAST(NULL AS VARCHAR2(13)) AS sql_id,
+         CAST(NULL AS VARCHAR2(9)) AS segtype,
+         ROUND(f.tablespace_size / 1048576) AS size_mb,
+         ROUND(f.allocated_space / 1048576) AS allocated_mb,
+         ROUND(f.free_space / 1048576) AS free_mb
+    FROM cdb_temp_free_space f
+  UNION ALL
+  SELECT * FROM (
+    SELECT 'SESSION', u.con_id, u.tablespace, s.inst_id, s.sid, s.username,
+           u.sql_id_tempseg, u.segtype,
+           ROUND(u.blocks * (SELECT TO_NUMBER(value) FROM v$parameter WHERE name = 'db_block_size') / 1048576),
+           CAST(NULL AS NUMBER), CAST(NULL AS NUMBER)
+      FROM gv$tempseg_usage u
+      JOIN gv$session s ON s.inst_id = u.inst_id AND s.saddr = u.session_addr
+     ORDER BY u.blocks DESC
+     FETCH FIRST 20 ROWS ONLY)
+---
+kind: tool
+name: space_undo
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Undo health per instance and hour over the last N hours (V$UNDOSTAT keeps about
+  4 days): longest running query (seconds) and its sql_id, tuned undo retention,
+  snapshot-too-old (ORA-01555) errors and undo out-of-space errors. Parameter:
+  hours (default 24, max 96).
+statement: |
+  SELECT inst_id, TRUNC(begin_time, 'HH24') AS hour,
+         MAX(maxquerylen) AS longest_query_s,
+         MAX(maxqueryid) KEEP (DENSE_RANK LAST ORDER BY maxquerylen) AS longest_query_sql_id,
+         MIN(tuned_undoretention) AS min_tuned_retention_s,
+         SUM(ssolderrcnt) AS ora_01555_errors,
+         SUM(nospaceerrcnt) AS undo_space_errors
+    FROM gv$undostat
+   WHERE begin_time > SYSDATE - LEAST(:1, 96) / 24
+   GROUP BY inst_id, TRUNC(begin_time, 'HH24')
+   ORDER BY hour DESC, inst_id
+parameters:
+  - name: hours
+    type: integer
+    description: "How many hours back (default 24, max 96)."
+    default: 24
+---
+kind: tool
+name: space_fra_usage
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Fast Recovery Area: location, limit, used, reclaimable (GB) and effective
+  percent used (used minus reclaimable), broken down by file type (archived logs,
+  backup pieces, flashback logs...). A full FRA stops archiving, hangs the primary
+  and breaks Data Guard transport.
+statement: |
+  SELECT d.name AS location,
+         ROUND(d.space_limit / 1073741824, 1) AS limit_gb,
+         ROUND(d.space_used / 1073741824, 1) AS used_gb,
+         ROUND(d.space_reclaimable / 1073741824, 1) AS reclaimable_gb,
+         ROUND((d.space_used - d.space_reclaimable) / NULLIF(d.space_limit, 0) * 100, 1) AS effective_used_pct,
+         u.file_type, u.percent_space_used, u.percent_space_reclaimable,
+         u.number_of_files
+    FROM v$recovery_file_dest d
+   CROSS JOIN v$recovery_area_usage u
+   WHERE u.percent_space_used > 0 OR u.number_of_files > 0
+   ORDER BY u.percent_space_used DESC
+---
+kind: tool
+name: space_rman_config
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  Non-default RMAN settings stored in the control file, including the ARCHIVELOG
+  DELETION POLICY (with Data Guard it should be "APPLIED ON ALL STANDBY" or
+  "SHIPPED TO ALL STANDBY", so logs are not deleted before the standby has them),
+  retention and channel settings. No rows = all defaults.
+statement: |
+  SELECT conf#, name, value
+    FROM v$rman_configuration
+   ORDER BY conf#
+---
+kind: tool
+name: space_recent_backups
+type: oracle-sql
+source: oracle-prod-source
+description: >-
+  RMAN backup jobs of the last N days: type, status, start/end, duration,
+  input/output GB. Failed or missing archivelog backups can fill the FRA.
+  Parameter: days (default 3, max 30).
+statement: |
+  SELECT session_key, input_type, status, start_time, end_time,
+         ROUND(elapsed_seconds / 60) AS minutes,
+         ROUND(input_bytes / 1073741824, 1) AS input_gb,
+         ROUND(output_bytes / 1073741824, 1) AS output_gb
+    FROM v$rman_backup_job_details
+   WHERE start_time > SYSDATE - LEAST(:1, 30)
+   ORDER BY start_time DESC
+   FETCH FIRST 50 ROWS ONLY
+parameters:
+  - name: days
+    type: integer
+    description: "How many days back (default 3, max 30)."
+    default: 3
+

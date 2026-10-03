@@ -1,0 +1,228 @@
+# Demo databases (Postgres, MySQL, MariaDB), each with its own MCP Toolbox container,
+# an Oracle 19c Data Guard lab (primary + physical standby, profile oracle-lab) and the
+# Toolbox for oracle_prod (profile oracle-prod). Turn both on in .env:
+#   COMPOSE_PROFILES=oracle-lab,oracle-prod
+# One Toolbox per database because the prebuilt configs reuse tool names
+# (execute_sql, list_tables, ...) and Toolbox refuses duplicate names.
+#
+#   database   db port (localhost)   toolbox URL (localhost)
+#   postgres   5432                  http://127.0.0.1:5000
+#   mysql      3306                  http://127.0.0.1:5001
+#   mariadb    3307                  http://127.0.0.1:5002
+#   oracle-primary   1531            -                       profile oracle-lab
+#   oracle-standby   1532            -                       profile oracle-lab
+#   oracle_prod  (the primary)       http://127.0.0.1:5004   profile oracle-prod
+
+x-toolbox: &toolbox
+  image: us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:${TOOLBOX_VERSION:-latest}
+  platform: linux/amd64
+  restart: unless-stopped
+  networks: [tool-network]
+
+services:
+  # ---------------------------------------------------------------- Postgres
+  db:
+    image: postgres:16
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    hostname: db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-toolbox_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-shop_db}
+      DB_READER_PASSWORD: ${DB_READER_PASSWORD:?set DB_READER_PASSWORD in .env}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-toolbox_admin} -d ${POSTGRES_DB:-shop_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [tool-network]
+
+  toolbox:
+    <<: *toolbox
+    hostname: toolbox
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DATABASE: ${POSTGRES_DB:-shop_db}
+      POSTGRES_USER: agent_reader
+      POSTGRES_PASSWORD: ${DB_READER_PASSWORD}
+    ports: ["127.0.0.1:5000:5000"]
+    volumes: ["./config:/config:ro"]
+    command: ["--prebuilt", "postgres", "--config", "/config/postgres-custom.yaml", "--address", "0.0.0.0"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  # ------------------------------------------------------------------- MySQL
+  mysql:
+    image: mysql:8.4
+    hostname: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: inventory
+      DB_READER_PASSWORD: ${MYSQL_READER_PASSWORD:?set MYSQL_READER_PASSWORD in .env}
+    ports: ["127.0.0.1:3306:3306"]
+    volumes:
+      - mysqldata:/var/lib/mysql
+      - ./db/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [tool-network]
+
+  toolbox-mysql:
+    <<: *toolbox
+    hostname: toolbox-mysql
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: inventory
+      MYSQL_USER: agent_reader
+      MYSQL_PASSWORD: ${MYSQL_READER_PASSWORD}
+    ports: ["127.0.0.1:5001:5000"]
+    command: ["--prebuilt", "mysql", "--address", "0.0.0.0"]
+    depends_on:
+      mysql: {condition: service_healthy}
+
+  # ----------------------------------------------------------------- MariaDB
+  mariadb:
+    image: mariadb:11.4
+    hostname: mariadb
+    # performance_schema is off by default in MariaDB; the query-stats tool needs it
+    command: ["--performance-schema=ON"]
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set MARIADB_ROOT_PASSWORD in .env}
+      MARIADB_DATABASE: support
+      DB_READER_PASSWORD: ${MARIADB_READER_PASSWORD:?set MARIADB_READER_PASSWORD in .env}
+    ports: ["127.0.0.1:3307:3306"]
+    volumes:
+      - mariadbdata:/var/lib/mysql
+      - ./db/mariadb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [tool-network]
+
+  toolbox-mariadb:
+    <<: *toolbox
+    hostname: toolbox-mariadb
+    environment:
+      MYSQL_HOST: mariadb
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: support
+      MYSQL_USER: agent_reader
+      MYSQL_PASSWORD: ${MARIADB_READER_PASSWORD}
+    ports: ["127.0.0.1:5002:5000"]
+    command: ["--prebuilt", "mysql", "--address", "0.0.0.0"]   # MariaDB speaks the MySQL protocol
+    depends_on:
+      mariadb: {condition: service_healthy}
+
+  # ---------------------------------------------------------- Oracle 19c lab
+  # Primary + physical standby built from scratch with your image. First start of the
+  # primary creates the CDB (15-40 min); the standby then clones itself with RMAN.
+  # Needs ~8 GB RAM free and ~30 GB disk. Details: ORACLE-LAB.md
+
+  oracle-init:            # one-off: makes the shared volume writable for the oracle user
+    image: ${ORACLE_IMAGE:-oracle/database:19.3.0-ee-ext}
+    profiles: ["oracle-lab"]
+    user: "0"
+    entrypoint: ["bash", "-c", "chown oracle:oinstall /opt/oracle/shared && chmod 770 /opt/oracle/shared"]
+    volumes: ["orashared:/opt/oracle/shared"]
+    restart: "no"
+    network_mode: none
+
+  oracle-primary:
+    image: ${ORACLE_IMAGE:-oracle/database:19.3.0-ee-ext}
+    profiles: ["oracle-lab"]
+    container_name: oracle-primary      # fixed name: docker exec -it oracle-primary ...
+    hostname: oracle-primary
+    environment:
+      ORACLE_SID: ORCLCDB
+      ORACLE_PDB: ORCLPDB1
+      ORACLE_PWD: ${ORACLE_SYS_PASSWORD:?set ORACLE_SYS_PASSWORD in .env}
+      ORACLE_CHARACTERSET: AL32UTF8
+      ENABLE_ARCHIVELOG: "true"
+      INIT_SGA_SIZE: ${ORACLE_SGA_MB:-1536}
+      INIT_PGA_SIZE: ${ORACLE_PGA_MB:-512}
+      PRIMARY_HOST: oracle-primary
+      STANDBY_HOST: oracle-standby
+      STANDBY_UNIQUE_NAME: ORCLCDB_STBY
+      AGENT_READER_PASSWORD: ${ORACLE_PROD_PASSWORD:?set ORACLE_PROD_PASSWORD in .env}
+    ports: ["127.0.0.1:${ORACLE_PRIMARY_PORT:-1531}:1521"]
+    volumes:
+      - oraprimary:/opt/oracle/oradata
+      - orashared:/opt/oracle/shared
+      - ./db/oracle-lab/primary:/opt/oracle/scripts/setup:ro   # runs once, after the CDB is created
+    shm_size: 1g
+    stop_grace_period: 2m
+    depends_on:
+      oracle-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    networks: [tool-network]
+
+  oracle-standby:
+    image: ${ORACLE_IMAGE:-oracle/database:19.3.0-ee-ext}
+    profiles: ["oracle-lab"]
+    container_name: oracle-standby
+    hostname: oracle-standby
+    entrypoint: ["bash", "/opt/oracle/dbagent/standby.sh"]
+    command: []
+    environment:
+      ORACLE_SID: ORCLCDB
+      ORACLE_PWD: ${ORACLE_SYS_PASSWORD}
+      PRIMARY_HOST: oracle-primary
+      PRIMARY_UNIQUE_NAME: ORCLCDB
+      STANDBY_UNIQUE_NAME: ORCLCDB_STBY
+    ports: ["127.0.0.1:${ORACLE_STANDBY_PORT:-1532}:1521"]
+    volumes:
+      - orastandby:/opt/oracle/oradata
+      - orashared:/opt/oracle/shared
+      - ./db/oracle-lab/standby:/opt/oracle/dbagent:ro
+    shm_size: 1g
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD", "bash", "/opt/oracle/dbagent/healthcheck.sh"]
+      interval: 1m
+      timeout: 30s
+      retries: 3
+      start_period: 90m      # waits for the primary, then copies the whole database
+    depends_on:
+      oracle-primary: {condition: service_started}
+    restart: unless-stopped
+    networks: [tool-network]
+
+  # ---------------------------------------------------------------- Oracle PROD
+  # Toolbox for oracle_prod. By default it points at the lab primary above; for a real
+  # primary set ORACLE_PROD_CONNECTION_STRING in .env (host must be reachable from Docker).
+  # Tools: config/oracle-prod.yaml. It restarts until the primary accepts logins.
+  toolbox-oracle-prod:
+    <<: *toolbox
+    profiles: ["oracle-prod"]
+    hostname: toolbox-oracle-prod
+    environment:
+      ORACLE_PROD_CONNECTION_STRING: ${ORACLE_PROD_CONNECTION_STRING:-oracle-primary:1521/ORCLCDB.localdomain}
+      ORACLE_PROD_USERNAME: ${ORACLE_PROD_USERNAME:-C##AGENT_READER}
+      ORACLE_PROD_PASSWORD: ${ORACLE_PROD_PASSWORD:-}
+    ports: ["127.0.0.1:5004:5000"]
+    volumes: ["./config:/config:ro"]
+    command: ["--config", "/config/oracle-prod.yaml", "--address", "0.0.0.0"]
+    depends_on:
+      oracle-primary: {condition: service_started, required: false}
+
+volumes:
+  pgdata:
+  mysqldata:
+  mariadbdata:
+  oraprimary:
+  orastandby:
+  orashared:
+
+networks:
+  tool-network:

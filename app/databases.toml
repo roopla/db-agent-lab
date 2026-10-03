@@ -1,0 +1,101 @@
+# Databases the agent can talk to. One [[database]] block per database.
+# Each needs its own MCP Toolbox server (see docker-compose.yml).
+# toolbox_url can be overridden with env var TOOLBOX_URL_<KEY>, e.g. TOOLBOX_URL_ORACLE.
+#
+#   key      short id, used in tool names (ask_<key>) and log lines
+#   name     shown to people
+#   about    what data lives there; the router uses this to pick the database
+#   dialect  SQL dialect the specialist must write
+#   notes    extra rules for this database's specialist
+
+[[database]]
+key = "postgres"
+name = "PostgreSQL (online shop)"
+toolbox_url = "http://127.0.0.1:5000"
+dialect = "PostgreSQL 16"
+about = "Online shop: customers, products, orders, order_items. Also PostgreSQL server health and admin."
+notes = """
+- Business tools exist: revenue_by_month, customer_orders, low_stock_products. Prefer them.
+- Order value = SUM(order_items.quantity * order_items.unit_price).
+- Cap rows with LIMIT n.
+"""
+
+[[database]]
+key = "mysql"
+name = "MySQL (inventory and purchasing)"
+toolbox_url = "http://127.0.0.1:5001"
+dialect = "MySQL 8.4"
+about = "Inventory and purchasing: suppliers, warehouses, purchase_orders. Also MySQL server health and admin."
+notes = """
+- Cap rows with LIMIT n. Quote identifiers with backticks if needed.
+"""
+
+[[database]]
+key = "mariadb"
+name = "MariaDB (customer support)"
+toolbox_url = "http://127.0.0.1:5002"
+dialect = "MariaDB 11.4 (MySQL-compatible)"
+about = "Customer support: support_agents, tickets (priority, status, opened/resolved times). Also MariaDB server health and admin."
+notes = """
+- Cap rows with LIMIT n. Resolution time: TIMESTAMPDIFF(MINUTE, opened_at, resolved_at).
+- These tools come from the MySQL toolset; a few (e.g. list_all_locks) rely on MySQL-only
+  system tables. If one errors, say so and use execute_sql on information_schema instead.
+"""
+
+# Your REAL Oracle 19c primary (Data Guard). Only used when ORACLE_PROD_CONNECTION_STRING
+# is set (see .env and docker-compose.yml, profile "oracle-prod"). Tools: config/oracle-prod.yaml.
+[[database]]
+key = "oracle_prod"
+name = "Oracle PROD (primary + Data Guard)"
+toolbox_url = "http://127.0.0.1:5004"
+requires_env = "ORACLE_PROD_CONNECTION_STRING"
+# Never send prod details to an external model (OpenAI, internet/..., zcloud/...).
+# Lab override: ALLOW_EXTERNAL_MODELS_FOR=oracle_prod in .env.
+internal_models_only = true
+dialect = "Oracle Database 19c"
+about = "The production Oracle 19c primary and its physical standbys: Data Guard sync, lag and gaps; live performance (waits, top SQL, blocking, plans); space, temp, undo, FRA and RMAN backups."
+notes = """
+YOU ARE CONNECTED TO THE PRIMARY ONLY, as a read-only user. Standbys are MOUNTED and
+cannot be queried; their state comes from what the primary reports. Never claim you
+ran a command. Write SQL for Oracle 19c: FETCH FIRST n ROWS ONLY, no trailing semicolon.
+INST_ID = RAC instance, CON_ID = container (PDB).
+
+DIAGNOSING (you MAY recommend fixes here, see the last section):
+- Data Guard / standby / sync / lag / gap: ALWAYS start with dg_health_check, then:
+  * status DEFERRED -> redo shipping was switched off. Fix on PRIMARY:
+    ALTER SYSTEM SET log_archive_dest_state_<N>=ENABLE SCOPE=BOTH SID='*';
+  * status ERROR or an error text -> dg_destinations and dg_messages(errors_only='Y').
+    Typical causes: network/listener/TNS to the standby, standby instance down,
+    password file mismatch (ORA-16191, ORA-01017), standby FRA full (ORA-19809).
+    After fixing the cause, restart shipping on PRIMARY:
+    ALTER SYSTEM SET log_archive_dest_state_<N>=DEFER SCOPE=MEMORY SID='*';
+    ALTER SYSTEM SET log_archive_dest_state_<N>=ENABLE SCOPE=MEMORY SID='*';
+  * recovery_mode IDLE -> redo apply (MRP) is stopped on the standby. On the STANDBY as
+    SYSDBA or SYSDG: first find out why (standby alert log; SELECT name, role, action,
+    thread#, sequence# FROM v$dataguard_process), then start apply:
+    ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT FROM SESSION;
+    Verify on the standby: SELECT name, value FROM v$dataguard_stats
+    WHERE name IN ('transport lag','apply lag'); and re-run dg_health_check.
+  * gap -> dg_missing_logs(dest_id). STILL_ON_DISK=YES: FAL normally fetches it; if not,
+    copy the file to the standby and run there: ALTER DATABASE REGISTER LOGFILE '<file>';
+    STILL_ON_DISK=NO: restore it on the primary (RMAN> RESTORE ARCHIVELOG FROM SEQUENCE
+    <s> UNTIL SEQUENCE <s> THREAD <t>;). Large or old gap: on the STANDBY, with apply
+    stopped: RMAN> RECOVER STANDBY DATABASE FROM SERVICE <primary_tns_alias>;
+  * apply running but lagging -> dg_apply_progress (which thread), dg_redo_rate (redo
+    spike?), dg_destinations (ASYNC/SYNC, errors), dg_standby_redo_logs (missing or
+    undersized SRLs prevent real-time apply).
+- Performance: perf_load_profile and perf_waits_now (now) or perf_ash_top_events (last
+  N minutes) -> perf_ash_top_sql -> perf_sql_details -> perf_sql_plan, or
+  perf_sql_plan_awr / perf_sql_plan_history for plan changes. Locks / hangs:
+  perf_blocking_sessions. Long jobs: perf_long_running_sql, perf_longops.
+- Space: space_tablespaces, space_temp_usage, space_undo. FRA / archiving stuck:
+  space_fra_usage, space_rman_config (deletion policy), space_recent_backups.
+
+RECOMMENDED ACTIONS: when a diagnosis finds a problem, end the answer with a section
+"Recommended actions (run these yourself)". For each command say WHERE (primary or
+standby), AS WHOM (SYSDBA/SYSDG/DBA), WHY (the evidence: tool + column values), and HOW
+TO VERIFY. Mark destructive commands (KILL SESSION, RMAN DELETE, anything dropping or
+resizing) as DESTRUCTIVE and say what to check first. Ending a session rolls back its
+work: ALTER SYSTEM KILL SESSION 'sid,serial#,@inst_id' IMMEDIATE; only after the owner
+agrees. If the user asks you to run a command, say you are read-only and they must run it.
+"""

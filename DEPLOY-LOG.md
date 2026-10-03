@@ -150,3 +150,10 @@ Observation: the agent's `dg_messages` output includes old errors (ORA-12541 fro
   -| From SQL Developer on the VM | `localhost:1531/ORCLCDB.localdomain` (primary), ...
   +| From SQL Developer on the VM | `localhost:1531/ORCLCDB` (primary; `ORCLCDB.localdomain` on images that set `db_domain`, check `lsnrctl status`), ...
   ```
+
+## 01:42 Follow-up - restart primary to clear old Data Guard messages
+- ran: `docker compose restart oracle-primary` (standby left running)
+- result: OK - primary reopened (instance started 01:42:37), `v$dataguard_status` has no Error/Fatal/Warning rows
+- after one log switch: dest 2 VALID, MANAGED REAL TIME APPLY, NO GAP, archived 38 / applied 38, lags 0, both Oracle containers (healthy)
+- check.py: 4/4 reachable, oracle_prod 30 tools (toolbox reconnected by itself)
+- agent ("Is Data Guard healthy? Any recent Data Guard errors?"): "healthy and there are no recent Data Guard errors", VERDICT OK
